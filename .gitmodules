@@ -1,0 +1,7 @@
+[submodule "cosim-gen-cli/third_party/libsystemctlm-soc"]
+	path = cosim-gen-cli/third_party/libsystemctlm-soc
+	url = https://github.com/Xilinx/libsystemctlm-soc.git
+[submodule "qemu-fdt"]
+	path = qemu-fdt
+	url = https://github.com/fzi-forschungszentrum-informatik/qemu-fdt.git
+	branch = fdt

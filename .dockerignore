@@ -1,0 +1,8 @@
+.git
+**/.git
+.gitmodules
+**/build/
+**/__pycache__/
+.venv/
+example/
+*.egg-info/

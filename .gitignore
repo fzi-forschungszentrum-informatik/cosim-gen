@@ -1,0 +1,9 @@
+**/__pycache__/
+**/build/
+*.elf
+*.mem
+.vscode/*
+example/sw_build/
+example/RocketSoC.hw.mlir
+.venv/
+cosim-gen-cli/*.egg-info/

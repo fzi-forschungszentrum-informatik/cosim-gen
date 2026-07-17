@@ -1,0 +1,70 @@
+#ifndef {{ guard }}
+#define {{ guard }}
+
+#include <cassert>
+#include <systemc>
+#include "arcilator-wrapper.h"
+{% for model in models %}
+{% for inc in model.typedIO.bus | map(attribute="INCLUDES") | sum(start=[]) | unique %}
+#include "{{ inc }}"
+{% endfor %}
+{% endfor %}
+#include "{{ header_name }}"
+
+{% for model in models %}
+class A{{ model.name }} : public ArcSystemCWrapper<{{ model.name }}, ValueChangeDump<{{ model.name }}Layout> > {
+public:
+{% for sig in model.typedIO.getSignals(true, true) %}
+  {{ sig | systemc_port_type }} {{ sig.name }}{"{{ sig.name }}"};
+{% endfor %}
+
+  A{{ model.name }}(sc_core::sc_module_name name, bool trace)
+                : ArcSystemCWrapper(name, trace) {};
+
+  virtual ~A{{ model.name }}() {};
+
+protected:
+  void readInputs() override {
+{% for sig in model.typedIO.resets + model.typedIO.intrs + model.typedIO.gpio + model.typedIO.other if sig.typ.value == "input" %}
+    arc_model.view.{{ sig.name }} = {{ sig.name }}.read();
+{% endfor %}
+{% for bus in model.typedIO.bus %}
+{% for name, sig in bus.io.items() if sig.typ.value == "output" %}
+    {{ "" if sig.numBits > 0 else "// Missing: " }}{{ sig.name }}.write(arc_model.view.{{ sig.name }});
+{% endfor %}
+{% endfor %}
+  };
+
+  void writeOutputs() override {
+{% for sig in model.typedIO.resets + model.typedIO.intrs + model.typedIO.gpio + model.typedIO.other if sig.typ.value == "output" %}
+    {{ sig.name }}.write(arc_model.view.{{ sig.name }});
+{% endfor %}
+{% for bus in model.typedIO.bus %}
+{% for name, sig in bus.io.items() if sig.typ.value == "input" %}
+    {{ "" if sig.numBits > 0 else "// Missing: " }}arc_model.view.{{ sig.name }} = {{ sig.name }}.read();
+{% endfor %}
+{% endfor %}
+  };
+
+  size_t numClocks() const override { return {{ model.typedIO.clocks | length }}; };
+
+  const sc_core::sc_in<bool> &clockPort(size_t i) const override {
+    switch (i) {
+{% for clk in model.typedIO.clocks %}
+    case {{ loop.index0 }}: return {{ clk.name }};
+{% endfor %}
+    default: assert(false && "clock index out of range"); return {{ model.typedIO.clocks[0].name }};
+    }
+  };
+
+  uint8_t *clockSlot(size_t i) override {
+    switch (i) {
+{% for clk in model.typedIO.clocks %}
+    case {{ loop.index0 }}: return &arc_model.view.{{ clk.name }};
+{% endfor %}
+    default: assert(false && "clock index out of range"); return nullptr;
+    }
+  };
+};
+{% endfor %}
+#endif // {{ guard }}

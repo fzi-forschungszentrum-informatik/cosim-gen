@@ -1,0 +1,215 @@
+#include <systemc.h>
+{% if ctx.needs_qemu %}
+#include <tlm_utils/tlm_quantumkeeper.h>
+#include "QemuTLM.h"
+{% for inc in ctx.protocol_includes %}
+#include "{{ inc }}"
+{% endfor %}
+{% endif %}
+
+// One representative period, used only for the max_cycles run-length
+// scaling below - every declared clock (either backend, possibly several)
+// gets its own independent sc_clock straight from its own init_entries;
+// this macro isn't wired into any clock's actual period.
+#define CLOCK_MHZ {{ ctx.anchor_freq_mhz }}
+
+#ifndef TRACE
+#define TRACE 0
+#endif
+#ifndef SYSC_TRACE
+#define SYSC_TRACE 0
+#endif
+#ifndef VM_COVERAGE
+#define VM_COVERAGE 0
+#endif
+
+#ifdef USE_VERILATOR
+#include "V{{ ctx.top_module }}.h"
+typedef V{{ ctx.top_module }} {{ ctx.top_module }}_Wrapper;
+#define SYSTEMC_TRACE_NAME "verilator_sysc"
+#if VM_COVERAGE
+#include "verilated_cov.h"
+#endif
+#if TRACE
+#include "verilated_vcd_sc.h"
+using VerilatorTraceType = VerilatedVcdSc;
+#define VERILATOR_TRACE_EXT ".vcd"
+#endif
+
+#elif defined(USE_ARCILATOR)
+#include "{{ ctx.wrapper_path }}"
+typedef A{{ ctx.model.name }} {{ ctx.top_module }}_Wrapper;
+#define SYSTEMC_TRACE_NAME "arcilator_sysc"
+#if VM_COVERAGE
+#error "VM_COVERAGE is verilator's own coverage collection - not available for the arcilator backend."
+#endif
+
+#else
+#error Neither verilator or arcilator specified
+#endif
+
+struct Top;
+{% if ctx.model.typedIO.other %}
+// Weak no-op default: define your own `void cosim_user_wire(Top&)` in an
+// EXTRA_SRCS file (see this component's Makefile) to bind the signals listed
+// below to your own SystemC peripheral model - the strong definition wins at
+// link time, so it's fine to add none at all.
+void cosim_user_wire(Top &top) __attribute__((weak));
+void cosim_user_wire(Top &top) { /* no user model connected */ }
+{% endif %}
+
+SC_MODULE(Top) {
+{% if ctx.needs_qemu %}
+  QemuTLM<{{ ctx.num_slave_buses }}, {{ ctx.num_master_buses }}, {{ ctx.wire_out | length }}, {{ ctx.wire_in | length }}> qemu;
+{% endif %}
+{% for clk in ctx.model.typedIO.clocks %}
+  sc_clock {{ ctx.inst }}_{{ clk.name }};
+{% endfor %}
+{% for sig in ctx.model.typedIO.resets %}
+  sc_signal<{{ sig | short_type }}> {{ ctx.inst }}_{{ sig.name }};
+{% endfor %}
+{% for view in ctx.buses %}
+  {{ view.bridge_class }}{{ view.template_types }} {{ view.member }};
+{% endfor %}
+{% for sig in ctx.model.typedIO.other %}
+  sc_signal<{{ sig | short_type }}> {{ ctx.inst }}_{{ sig.name }};
+{% endfor %}
+#ifdef USE_ARCILATOR
+  {{ ctx.top_module }}_Wrapper {{ ctx.inst }}{"{{ ctx.inst }}", TRACE};
+#else
+  {{ ctx.top_module }}_Wrapper {{ ctx.inst }}{"{{ ctx.inst }}"};
+#endif
+
+  Top(sc_module_name name{{ ", const char *sk_descr_riscv, sc_time quantum" if ctx.needs_qemu else "" }})
+    : {{ ctx.init_entries | join(",\n      ") }}
+  {
+{% for clk in ctx.model.typedIO.clocks %}
+    {{ ctx.inst }}.{{ clk.name }}({{ ctx.inst }}_{{ clk.name }});
+{% endfor %}
+{% for sig in ctx.model.typedIO.resets %}
+    {{ ctx.inst }}.{{ sig.name }}({{ ctx.inst }}_{{ sig.name }});
+{% endfor %}
+{% for sig in ctx.model.typedIO.other %}
+    {{ ctx.inst }}.{{ sig.name }}({{ ctx.inst }}_{{ sig.name }});
+{% endfor %}
+{% if ctx.model.typedIO.other %}
+    #warning Unconnected signals ({{ ctx.inst }}): {{ ctx.model.typedIO.other | map(attribute="name") | join(", ") }}
+    cosim_user_wire(*this);
+{% endif %}
+{% if ctx.needs_qemu %}
+
+{% for view in ctx.buses %}
+{% for name, sig in view.bus.io.items() if sig.numBits > 0 %}
+    {{ ctx.inst }}.{{ sig.name }}({{ view.member }}.{{ view.signal_accessor }}{{ name }});
+{% endfor %}
+{% endfor %}
+{% for sig in ctx.wire_out %}
+    {{ ctx.inst }}.{{ sig.name }}(qemu.wire_in[{{ loop.index0 }}]);
+{% endfor %}
+{% for sig in ctx.wire_in %}
+    {{ ctx.inst }}.{{ sig.name }}(qemu.wire_out[{{ loop.index0 }}]);
+{% endfor %}
+
+{% for view in ctx.buses %}
+    qemu.{{ view.qemu_array }}[{{ view.qemu_index }}]->bind({{ view.member }}.{{ view.socket_member }});
+{% endfor %}
+    qemu.rst({{ ctx.inst }}_{{ ctx.qemu_reset_name }});
+
+    qemu.tie_off();
+    tlm_utils::tlm_quantumkeeper::set_global_quantum(quantum);
+{% endif %}
+  }
+
+  void trace(sc_trace_file* trace_fp) const override {
+{% for sig in ctx.model.typedIO.clocks + ctx.model.typedIO.resets + ctx.model.typedIO.intrs + ctx.model.typedIO.gpio + ctx.model.typedIO.other %}
+    sc_trace(trace_fp, {{ ctx.inst }}.{{ sig.name }}, "{{ sig.name }}");
+{% endfor %}
+{% for view in ctx.buses %}
+{% for name, sig in view.bus.io.items() if sig.numBits > 0 %}
+    sc_trace(trace_fp, {{ ctx.inst }}.{{ sig.name }}, "{{ sig.name }}");
+{% endfor %}
+{% endfor %}
+  }
+};
+
+int sc_main(int argc, char *argv[]) {
+  sc_set_time_resolution(1, SC_PS);
+{% if ctx.needs_qemu %}
+
+  uint64_t sync_quantum;
+  if (argc < 2) {
+    cout << "invalid arguments" << endl;
+    return EXIT_FAILURE;
+  } else if (argc < 3)
+    sync_quantum = 1000;
+  else
+    sync_quantum = strtoull(argv[2], NULL, 10);
+  uint64_t max_cycles = argc < 4 ? 0 : strtoull(argv[3], NULL, 10);
+{% else %}
+  uint64_t max_cycles = argc < 2 ? 0 : strtoull(argv[1], NULL, 10);
+{% endif %}
+
+#ifdef USE_VERILATOR
+  Verilated::debug(0);
+  Verilated::commandArgs(argc, argv);
+#endif
+
+{% if ctx.needs_qemu %}
+  Top top("top", argv[1], sc_time((double)sync_quantum, SC_NS));
+{% else %}
+  Top top("top");
+{% endif %}
+
+  sc_start(SC_ZERO_TIME);
+
+#ifdef USE_VERILATOR
+#if TRACE
+  Verilated::traceEverOn(true);
+  VerilatorTraceType *verilator_trace_fp = new VerilatorTraceType;
+  top.{{ ctx.inst }}.trace(verilator_trace_fp, 99);
+  verilator_trace_fp->open(SYSTEMC_TRACE_NAME "_native" VERILATOR_TRACE_EXT);
+#endif
+#endif
+#if SYSC_TRACE
+  sc_trace_file *sysc_trace_fp = sc_create_vcd_trace_file(SYSTEMC_TRACE_NAME);
+  top.trace(sysc_trace_fp);
+#endif
+
+{% for rst in ctx.model.typedIO.reset_ifaces %}
+{% for sig in rst.ports %}
+  top.{{ ctx.inst }}_{{ sig.name }}.write({{ "false" if rst.active_low else "true" }});
+{% endfor %}
+{% endfor %}
+  // Held for the slowest declared clock's own period,
+  // so a reset can't be released before every domain's first edge would occur.
+  sc_start({{ ctx.reset_hold_us }}, SC_US);
+{% for rst in ctx.model.typedIO.reset_ifaces %}
+{% for sig in rst.ports %}
+  top.{{ ctx.inst }}_{{ sig.name }}.write({{ "true" if rst.active_low else "false" }});
+{% endfor %}
+{% endfor %}
+
+#ifdef USE_VERILATOR
+  for (uint64_t cycle = 0; !Verilated::gotFinish() && (max_cycles == 0 || cycle < max_cycles); ++cycle)
+    sc_start(1000.0 / CLOCK_MHZ, SC_NS);
+#else
+  if (max_cycles > 0)
+    sc_start(max_cycles * (1000.0 / CLOCK_MHZ), SC_NS);
+  else
+    sc_start();  /* Does not return */
+#endif
+
+#ifdef USE_VERILATOR
+#if TRACE
+  verilator_trace_fp->close();
+#endif
+#if VM_COVERAGE
+  VerilatedCov::write("coverage.dat");
+#endif
+#endif
+#if SYSC_TRACE
+  sc_close_vcd_trace_file(sysc_trace_fp);
+#endif
+
+  return 0;
+}

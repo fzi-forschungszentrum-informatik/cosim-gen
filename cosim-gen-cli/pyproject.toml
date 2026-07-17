@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cosim"
+version = "0.1.0"
+description = "User-friendly QEMU<->RTL co-simulation tool built on cosim-gen-circt"
+requires-python = ">=3.10"
+dependencies = [
+    "pydevicetree",  # codegen/dts_overlay.py: parses/emits the QEMU device-tree overlay
+    "pyyaml",        # genconfig.py: reads the diplomacy config
+    "tqdm",          # genconfig.py: progress bars for batch extraction
+    "jinja2",        # codegen/sim_main.py: sim.cpp / arcilator wrapper templates
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+cosim = "cosim.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["cosim*"]
+
+[tool.setuptools.package-data]
+cosim = ["codegen/templates/*.j2"]
+
+# mk/, include/, live alongside this pyproject.toml (not inside the
+# cosim/ package) and are located at runtime relative to the repo checkout
+# (see cosim/paths.py) - install with `../.venv/bin/pip install -e .` (the venv
+# lives at the repo root, not inside cosim-gen-cli/) for development.

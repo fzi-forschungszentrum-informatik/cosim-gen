@@ -1,0 +1,4 @@
+/include/ "{{ base_dts_name }}"
+{% for path in component_overlay_paths %}
+/include/ "{{ path }}"
+{% endfor %}

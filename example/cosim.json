@@ -1,0 +1,115 @@
+{
+  "design": {
+    "input": "RocketSoC.hw.mlir",
+    "dts": "RocketSoC.dts",
+    "supported_backends": ["verilator", "arcilator"]
+  },
+  "qemu": {
+    "elfs": ["sw_build/bootrom.elf", "sw_build/simram.elf"],
+    "extra_args": []
+  },
+  "soc_rtl": {
+    "extra_files": ["sw_build/bootrom.mem", "sw_build/simram.mem"],
+    "extra_args": ["+uart_tx=0", "+uart_tx_printf=1"],
+    "interfaces": [
+      { "kind": "clock", "name": "sys_clock", "freq_mhz": 100 },
+      { "kind": "reset", "name": "sys_reset", "active_low": true },
+      { "kind": "clock", "name": "gemac_gmii_tx_phyClk", "freq_mhz": 125},
+      { "kind": "clock", "name": "gemac_gmii_rx_phyClk", "freq_mhz": 125},
+      { "kind": "reset", "name": "gemac_gmii_reset"}
+    ]
+  },
+  "components": [
+    { "type": "TLUART",
+      "path": "topDesign/topMod/uartClockDomainWrapper/uart_0",
+      "compat": "sifive,uart0",
+      "interfaces": [
+        { "kind": "clock", "name": "clock", "freq_mhz": 100 },
+        { "kind": "reset", "name": "reset" },
+        { "kind": "tilelink", "prefix": "auto_control_xing_in", "dir": "slave" },
+        { "kind": "interrupt", "name": "auto_int_xing_out_sync_0", "dir": "out" }
+      ],
+      "extra_args": ["+uart_tx=0", "+uart_tx_printf=1"]},
+    { "type": "TLGPIO",
+      "path": "topDesign/topMod/gpioClockDomainWrapper/gpio_0",
+      "compat": "sifive,gpio0",
+      "interfaces": [
+        { "kind": "clock", "name": "clock", "freq_mhz": 100 },
+        { "kind": "reset", "name": "reset" },
+        { "kind": "tilelink", "prefix": "auto_control_xing_in", "dir": "slave" },
+        { "kind": "interrupt", "name": "auto_int_xing_out_sync_0", "dir": "out" },
+        { "kind": "interrupt", "name": "auto_int_xing_out_sync_1", "dir": "out" },
+        { "kind": "interrupt", "name": "auto_int_xing_out_sync_2", "dir": "out" },
+        { "kind": "interrupt", "name": "auto_int_xing_out_sync_3", "dir": "out" },
+        { "kind": "interrupt", "name": "auto_int_xing_out_sync_4", "dir": "out" },
+        { "kind": "interrupt", "name": "auto_int_xing_out_sync_5", "dir": "out" },
+        { "kind": "interrupt", "name": "auto_int_xing_out_sync_6", "dir": "out" },
+        { "kind": "interrupt", "name": "auto_int_xing_out_sync_7", "dir": "out" },
+        { "kind": "gpio", "prefix": "auto_io_out_pins" }
+      ] },
+    { "type": "TLDMX512",
+      "path": "topDesign/topMod/dmx512_0",
+      "compat": "fzi,dmx512",
+      "interfaces": [
+        { "kind": "clock", "name": "clock", "freq_mhz": 100 },
+        { "kind": "reset", "name": "reset" },
+        { "kind": "tilelink", "prefix": "auto_control_xing_in", "dir": "slave" },
+        { "kind": "interrupt", "name": "auto_int_xing_out_sync_0", "dir": "out" }
+      ] },
+    { "type": "HwIdentRegs",
+      "path": "topDesign/topMod/identRegs",
+      "compat": "fzi,hwidentregs",
+      "interfaces": [
+        { "kind": "clock", "name": "clock", "freq_mhz": 100 },
+        { "kind": "reset", "name": "reset" },
+        { "kind": "tilelink", "prefix": "auto_control_xing_in", "dir": "slave" }
+      ] },
+    { "type": "SimTestRegisters",
+      "path": "topDesign/topMod/simtestmod",
+      "compat": "fzi,simtestregs",
+      "interfaces": [
+        { "kind": "clock", "name": "clock", "freq_mhz": 100 },
+        { "kind": "reset", "name": "reset" },
+        { "kind": "tilelink", "prefix": "auto_control_in", "dir": "slave" }
+      ] },
+    { "type": "FancyRocketRegisters",
+      "path": "topDesign/topMod/sethi21_0",
+      "compat": "fzi,sethi21",
+      "interfaces": [
+        { "kind": "clock", "name": "clock", "freq_mhz": 100 },
+        { "kind": "clock", "name": "auto_io_out_gmii_tx_phyClk", "freq_mhz": 125},
+        { "kind": "clock", "name": "auto_io_out_gmii_rx_phyClk", "freq_mhz": 125},
+        { "kind": "reset", "name": "reset" },
+        { "kind": "reset", "name": "auto_io_out_gmii_reset"},
+        { "kind": "tilelink", "prefix": "auto_control_xing_in", "dir": "slave" },
+        { "kind": "tilelink", "prefix": "auto_dma_out", "dir": "master" },
+        { "kind": "interrupt", "name": "auto_int_xing_out_sync_0", "dir": "out" }
+      ] },
+    { "type": "TLError",
+      "path": "topDesign/topMod/cbus/wrapped_error_device/error",
+      "compat": "sifive,error0",
+      "interfaces": [
+        { "kind": "clock", "name": "clock", "freq_mhz": 100 },
+        { "kind": "reset", "name": "reset" },
+        { "kind": "tilelink", "prefix": "auto_in", "dir": "slave" }
+      ] },
+    { "type": "TLMaskROM",
+      "path": "topDesign/topMod/maskROM",
+      "compat": "sifive,maskrom0",
+      "interfaces": [
+        { "kind": "clock", "name": "clock", "freq_mhz": 100 },
+        { "kind": "reset", "name": "reset" },
+        { "kind": "tilelink", "prefix": "auto_in", "dir": "slave" }
+      ],
+      "extra_files": ["sw_build/bootrom.mem"] },
+    { "type": "TLRAM",
+      "path": "topDesign/topMod/ocmClockDomainWrapper/ocm_bank0",
+      "dts_path": "/memory@b0000000",
+      "interfaces": [
+        { "kind": "clock", "name": "clock", "freq_mhz": 100 },
+        { "kind": "reset", "name": "reset" },
+        { "kind": "tilelink", "prefix": "auto_in", "dir": "slave" }
+      ],
+      "extra_files": ["sw_build/simram.mem"] }
+  ]
+}

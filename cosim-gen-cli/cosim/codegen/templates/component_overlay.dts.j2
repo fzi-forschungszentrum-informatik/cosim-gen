@@ -1,0 +1,48 @@
+&{/} {
+    {{ ctx.rp_label }}: {{ ctx.chrdev_id }} {
+        compatible = "remote-port";
+        chrdev-id = "{{ ctx.chrdev_id }}";
+        sync = <0x1>;
+    };
+{% for bus in ctx.master_buses %}
+
+    tlmaster_{{ ctx.name }}_{{ bus.name }}: remote-port-memory-slave_{{ ctx.name }}_{{ bus.index }} {
+        compatible = "remote-port-memory-slave";
+        remote-ports = <&{{ ctx.rp_label }} {{ bus.rp_index }}>;
+        mr = <&{{ ctx.sys_bus | dts_ref }}>;
+    };
+{% endfor %}
+{% for slave in ctx.slaves_by_path.get("/", []) %}
+
+    {{ slave.label }}: {{ slave.node_name }} {
+        compatible = "remote-port-memory-master";
+        remote-ports = <&{{ ctx.rp_label }} {{ slave.index }}>;
+        reg = <{{ slave.registers }}>;
+        reg-names = "control";
+    };
+{% endfor %}
+
+    wires_in_{{ ctx.name }}: rp_wires_in_{{ ctx.name }} {
+        compatible = "remote-port-gpio";
+        remote-ports = <&{{ ctx.rp_label }} 20>;
+{% if ctx.interrupts %}
+        interrupt-parent = <&{{ ctx.intc_path | dts_ref }}>;
+        interrupts = <{{ ctx.interrupts | join(" ") }}>;
+{% endif %}
+    };
+};
+{% for path, slaves in ctx.slaves_by_path.items() %}
+{% if path != "/" %}
+
+&{{ path | dts_ref }} {
+{% for slave in slaves %}
+    {{ slave.label }}: {{ slave.node_name }} {
+        compatible = "remote-port-memory-master";
+        remote-ports = <&{{ ctx.rp_label }} {{ slave.index }}>;
+        reg = <{{ slave.registers }}>;
+        reg-names = "control";
+    };
+{% endfor %}
+};
+{% endif %}
+{% endfor %}

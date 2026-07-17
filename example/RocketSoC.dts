@@ -1,0 +1,170 @@
+/dts-v1/;
+
+/ {
+	#address-cells = <1>;
+	#size-cells = <1>;
+	compatible = "freechips,rocketchip-unknown-dev";
+	model = "freechips,rocketchip-unknown";
+	L3: aliases {
+		bootrom0 = &L15;
+		ethernet0 = &L19;
+		serial0 = &L16;
+	};
+	L5: cbus_clock {
+		#clock-cells = <0>;
+		clock-frequency = <100000000>;
+		clock-output-names = "cbus_clock";
+		compatible = "fixed-clock";
+	};
+	L13: chosen {
+	};
+	L2: cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		timebase-frequency = <1000000>;
+		L9: cpu@0 {
+			resetvec = <0x10000>;
+			clock-frequency = <0>;
+			compatible = "sifive,rocket0", "riscv";
+			d-cache-block-size = <64>;
+			d-cache-sets = <64>;
+			d-cache-size = <16384>;
+			d-tlb-sets = <1>;
+			d-tlb-size = <32>;
+			device_type = "cpu";
+			hardware-exec-breakpoint-count = <1>;
+			i-cache-block-size = <64>;
+			i-cache-sets = <64>;
+			i-cache-size = <16384>;
+			i-tlb-sets = <1>;
+			i-tlb-size = <32>;
+			mmu-type = "riscv,sv39";
+			next-level-cache = <&L14>;
+			reg = <0x0>;
+			riscv,isa = "rv64imafdczicsr_zifencei_zihpm_xrocket";
+			riscv,pmpgranularity = <4>;
+			riscv,pmpregions = <8>;
+			status = "okay";
+			timebase-frequency = <1000000>;
+			tlb-split;
+			L7: interrupt-controller {
+				#interrupt-cells = <1>;
+				compatible = "riscv,cpu-intc";
+				interrupt-controller;
+			};
+		};
+	};
+	L14: memory@b0000000 {
+		device_type = "memory";
+		reg = <0xb0000000 0x200000>;
+	};
+	L4: pbus_clock {
+		#clock-cells = <0>;
+		clock-frequency = <100000000>;
+		clock-output-names = "pbus_clock";
+		compatible = "fixed-clock";
+	};
+	L1: soc {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		compatible = "freechips,rocketchip-unknown-soc", "simple-bus";
+		ranges;
+		L10: clint@2000000 {
+			#interrupt-cells = <1>;
+			aperture-size = <65536>;
+			compatible = "riscv,clint0", "riscv.sifive.clint", "sifive,clint0";
+			interrupt-controller;
+			interrupts-extended = <&L7 3 &L7 7>;
+			num-harts = <1>;
+			reg = <0x2000000 0x10000>;
+			reg-names = "control";
+			sip-base = <0>;
+			time-base = <49144>;
+			timecmp-base = <16384>;
+		};
+		L18: dmx512@9000 {
+			compatible = "fzi,dmx512", "fzi,dmx-controller";
+			interrupt-parent = <&L11>;
+			interrupts = <10>;
+			reg = <0x9000 0x1000>;
+			reg-names = "control";
+		};
+		L6: error-device@3000 {
+			compatible = "sifive,error0";
+			reg = <0x3000 0x1000>;
+		};
+		L17: gpio@64002000 {
+			#gpio-cells = <2>;
+			#interrupt-cells = <2>;
+			clocks = <&L4>;
+			compatible = "sifive,gpio0", "sifive,gpio1";
+			gpio-controller;
+			interrupt-controller;
+			interrupt-parent = <&L11>;
+			interrupts = <2 3 4 5 6 7 8 9>;
+			reg = <0x64002000 0x1000>;
+			reg-names = "control";
+		};
+		L12: hwidentregs@f000 {
+			compatible = "fzi,hwidentregs";
+			fzi,board-ident = "Veri";
+			fzi,dirty-build;
+			fzi,timestamp = [5B 4D E9 9A 9F 01 00 00];
+			reg = <0xf000 0x1000>;
+			reg-names = "control";
+		};
+		L11: interrupt-controller@c000000 {
+			#interrupt-cells = <1>;
+			aperture-size = <67108864>;
+			compatible = "riscv,plic0", "sifive,plic-1.0.0", "riscv.sifive.plic";
+			context-base = <2097152>;
+			context-stride = <4096>;
+			enable-base = <8192>;
+			enable-stride = <128>;
+			hart-config = "MSU";
+			interrupt-controller;
+			interrupts-extended = <&L7 11 &L7 9>;
+			pending-base = <4096>;
+			priority-base = <0>;
+			reg = <0xc000000 0x4000000>;
+			reg-names = "control";
+			riscv,max-priority = <7>;
+			riscv,ndev = <12>;
+		};
+		L15: rom@10000 {
+			compatible = "sifive,maskrom0";
+			reg = <0x10000 0x2000>;
+			reg-names = "mem";
+		};
+		L16: serial@64000000 {
+			clock-frequency = <100000000>;
+			clocks = <&L4>;
+			compatible = "sifive,uart0", "riscv.sifive.uart";
+			current-speed = <115200>;
+			interrupt-parent = <&L11>;
+			interrupts = <1>;
+			reg = <0x64000000 0x1000>;
+			reg-names = "control";
+		};
+		L19: sethi21@8000 {
+			compatible = "fzi,sethi21";
+			fzi,dma-bits = <32>;
+			fzi,l1-rxdesc-queue-depth = <2>;
+			fzi,mac-address-register = "rw";
+			fzi,max-ring-size = <16>;
+			fzi,phy-status-mode = "none";
+			interrupt-parent = <&L11>;
+			interrupts = <11>;
+			local-mac-address = [00 01 02 03 04 05];
+			max-frame-size = <1518>;
+			max-speed = <1000>;
+			reg = <0x8000 0x1000>;
+			reg-names = "control";
+		};
+		L20: simtestregs@78000000 {
+			compatible = "fzi,simtestregs";
+			reg = <0x78000000 0x1000>;
+			reg-names = "control";
+		};
+	};
+};
