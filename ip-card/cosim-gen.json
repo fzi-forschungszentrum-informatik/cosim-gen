@@ -1,0 +1,52 @@
+{
+  "schemaVersion": "0.9",
+  "basicInfo": {
+    "ipName": "cosim-gen",
+    "version": "0.9.0",
+    "sourceLanguages": ["C++", "Python"],
+    "trl": "TRL-6",
+    "status": "Prototype implemented",
+    "provider": [
+      {
+        "organizationName": "FZI Research Center for Information Technology",
+        "organizationURL": "www.fzi.de",
+        "organizationAlias": ["FZI Forschungszentrum Informatik"]
+      }
+    ],
+    "license": "Apache-2.0",
+    "licenseDetails": "With LLVM Exception",
+    "repositoryURL": "https://github.com/fzi-forschungszentrum-informatik/cosim-gen.git",
+    "project": "ISOLDE",
+    "workItem": "4.3",
+    "ipType": {
+      "category": ["Software Tool", "Domain Specific Simulation Tools", "EDA Tools and methods for architecture exploration"],
+      "domain": ["Other"],
+      "comment": "QEMU/RTL co-simulation generator: extracts individual peripherals out of a synthesizable CIRCT core dialects design into standalone SystemC models, wires each to QEMU over a remote-port channel, and runs QEMU alongside the RTL peripheral it talks to.",
+      "service": "no"
+    }
+  },
+  "systemLevelInfo": {
+    "architecture": "RISC-V",
+    "SWDependencies": "qemu-fdt, firtool, arcilator, Verilator, dtc, SystemC, Python 3"
+  },
+  "interfaces": {
+    "CLI": [
+      "cosim",
+      "cosim-extract",
+      "cosim-gen-opt"
+    ],
+    "API": ["NA"],
+    "inputArtifacts": [
+      { "artifact": "RTL design", "format": "CIRCT core dialects (.hw.mlir)" },
+      { "artifact": "Platform device tree", "format": "DTS" },
+      { "artifact": "Co-simulation config", "format": "JSON" }
+    ],
+    "outputArtifacts": [
+      { "artifact": "Per-component co-simulation binary", "format": "ELF" },
+      { "artifact": "QEMU device-tree config", "format": "DTS/DTB" }
+    ]
+  },
+  "deployment": {
+    "bundle": "Docker"
+  }
+}
