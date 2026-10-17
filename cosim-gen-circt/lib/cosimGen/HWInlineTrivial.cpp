@@ -9,6 +9,7 @@
 #include "circt/Dialect/Emit/EmitOps.h"
 #include "circt/Dialect/HW/HWInstanceGraph.h"
 #include "circt/Dialect/HW/HWOps.h"
+#include "circt/Dialect/HW/InnerSymbolNamespace.h"
 #include "circt/Dialect/Seq/SeqOps.h"
 #include "cosimGen/HWOpt.h"
 #include "mlir/IR/IRMapping.h"
@@ -28,10 +29,12 @@ namespace circt::cosimGen {
 
 namespace {
 
-/* Copied from FlattenModules.cpp */
 struct PrefixingInliner : public mlir::InlinerInterface {
   StringRef prefix;
-  PrefixingInliner(MLIRContext *context, StringRef prefix) : InlinerInterface(context), prefix(prefix) {}
+  mlir::AttrTypeReplacer &replacer;
+
+  PrefixingInliner(MLIRContext *context, StringRef prefix, mlir::AttrTypeReplacer &replacer)
+      : InlinerInterface(context), prefix(prefix), replacer(replacer) {}
 
   bool isLegalToInline(Region *dest, Region *src, bool wouldBeCloned, IRMapping &valueMapping) const override {
     return true;
@@ -47,7 +50,10 @@ struct PrefixingInliner : public mlir::InlinerInterface {
 
   void processInlinedBlocks(iterator_range<Region::iterator> inlinedBlocks) override {
     for (Block &block : inlinedBlocks)
-      block.walk([&](Operation *op) { updateNames(op); });
+      block.walk([&](Operation *op) {
+        updateNames(op);
+        replacer.replaceElementsIn(op);
+      });
   }
 
   StringAttr updateName(StringAttr attr) const {
@@ -57,10 +63,9 @@ struct PrefixingInliner : public mlir::InlinerInterface {
   }
 
   void updateNames(Operation *op) const {
-    if (auto name = op->getAttrOfType<StringAttr>("name"))
-      op->setAttr("name", updateName(name));
-    if (auto name = op->getAttrOfType<StringAttr>("instanceName"))
-      op->setAttr("instanceName", updateName(name));
+    for (auto key : {"name", "instanceName"})
+      if (auto name = op->getAttrOfType<StringAttr>(key))
+        op->setAttr(key, updateName(name));
     if (auto namesAttr = op->getAttrOfType<ArrayAttr>("names")) {
       SmallVector<Attribute> names(namesAttr.getValue().begin(), namesAttr.getValue().end());
       for (auto &name : names)
@@ -88,18 +93,12 @@ private:
 
     bool instFound = false;
     for (Operation &op : *mod.getBodyBlock()) {
-      if (isa<hw::OutputOp>(op)) {
+      if (isa<hw::OutputOp, hw::WireOp, hw::ConstantOp, seq::ConstClockOp>(op))
         continue;
-      }
-
-      if (isa<hw::WireOp>(op) || isa<hw::ConstantOp>(op) || isa<seq::ConstClockOp>(op)) {
-        continue;
-      }
 
       if (isa<hw::InstanceOp>(op)) {
-        if (instFound) {
+        if (instFound)
           return false;
-        }
         instFound = true;
         continue;
       }
@@ -114,47 +113,59 @@ private:
     return true;
   }
 
-  hw::HWModuleOp getModuleOp(hw::InstanceOp inst) {
-    Operation *topLevelOp = inst->getParentOfType<mlir::ModuleOp>(); // or something similar
-    SymbolTable symbolTable(topLevelOp);
-    return symbolTable.lookup<hw::HWModuleOp>(inst.getModuleName());
-  }
+  LogicalResult inlineInst(hw::InstanceOp inst, hw::HWModuleOp mod, bool isLastModuleUse,
+                           hw::InnerSymbolNamespaceCollection &namespaces, StringAttr targetName = {}) {
+    auto parentModule = inst->getParentOfType<hw::HWModuleOp>();
+    if (!targetName)
+      targetName = parentModule.getModuleNameAttr();
+    auto &ns = namespaces[parentModule];
 
-  bool inlineInst(hw::InstanceOp inst, hw::HWModuleOp mod, bool isLastModuleUse) {
-    PrefixingInliner inliner(&getContext(), inst.getInstanceName());
+    // Fresh names in the parent, so inlining one module twice doesn't duplicate its inner symbols.
+    DenseMap<StringAttr, StringAttr> oldToNewInnerSyms;
+    mod.walk([&](Operation *op) {
+      if (auto sym = op->getAttrOfType<hw::InnerSymAttr>(hw::InnerSymbolTable::getInnerSymbolAttrName()))
+        for (auto prop : sym.getProps())
+          oldToNewInnerSyms[prop.getName()] = StringAttr::get(&getContext(), ns.newName(prop.getName().getValue()));
+    });
+    mlir::AttrTypeReplacer replacer;
+    replacer.addReplacement([&](hw::InnerSymPropertiesAttr attr) {
+      auto name = oldToNewInnerSyms.lookup(attr.getName());
+      return name ? hw::InnerSymPropertiesAttr::get(&getContext(), name, attr.getFieldID(), attr.getSymVisibility())
+                  : attr;
+    });
+    replacer.addReplacement([&](hw::InnerRefAttr attr) -> std::pair<Attribute, WalkResult> {
+      if (attr.getModule() != mod.getModuleNameAttr())
+        return {attr, WalkResult::skip()};
+      auto it = oldToNewInnerSyms.find(attr.getName());
+      if (it == oldToNewInnerSyms.end())
+        return {attr, WalkResult::skip()};
+      return {hw::InnerRefAttr::get(targetName, it->second), WalkResult::skip()};
+    });
+    PrefixingInliner inliner(&getContext(), inst.getInstanceName(), replacer);
+    mlir::InlinerConfig config;
     if (failed(mlir::inlineRegion(inliner, config.getCloneCallback(), &mod.getBody(), inst, inst.getOperands(),
-                                  inst.getResults(), std::nullopt, !isLastModuleUse))) {
-      inst.emitError("failed to inline '")
-          << mod.getModuleName() << "' into instance '" << inst.getInstanceName() << "'";
-      signalPassFailure();
-      return true;
+                                  inst.getResults(), std::nullopt, !isLastModuleUse)))
+      return inst.emitError("failed to inline '")
+             << mod.getModuleName() << "' into instance '" << inst.getInstanceName() << "'";
+
+    if (mod->hasAttr(emit::getFragmentsAttrName())) {
+      llvm::SetVector<Attribute> fragments;
+      for (auto module : {mod, parentModule})
+        if (auto attrs = module->getAttrOfType<ArrayAttr>(emit::getFragmentsAttrName()))
+          fragments.insert(attrs.begin(), attrs.end());
+      parentModule->setAttr(emit::getFragmentsAttrName(), ArrayAttr::get(&getContext(), fragments.getArrayRef()));
     }
 
-    if (auto modFrag = mod->getAttr(emit::getFragmentsAttrName())) {
-      auto parent = inst->getParentOfType<hw::HWModuleOp>();
-      if (auto pFrag = mod->getAttr(emit::getFragmentsAttrName())) {
-        llvm::SetVector<mlir::Attribute> uniqueAttrs;
-        for (auto attr : cast<ArrayAttr>(modFrag))
-          uniqueAttrs.insert(attr);
-        for (auto attr : cast<ArrayAttr>(pFrag))
-          uniqueAttrs.insert(attr);
-        parent->setAttr(emit::getFragmentsAttrName(),
-                        mlir::ArrayAttr::get(parent->getContext(), uniqueAttrs.getArrayRef()));
-      } else {
-        parent->setAttr(emit::getFragmentsAttrName(), modFrag);
-      }
-    }
-
-    return false;
+    return success();
   }
 
 public:
   using impl::HWInlineTrivialBase<HWInlineTrivialPass>::HWInlineTrivialBase;
-  mlir::InlinerConfig config;
 
   void runOnOperation() final {
     auto &instanceGraph = getAnalysis<hw::InstanceGraph>();
     DenseSet<Operation *> handled;
+    hw::InnerSymbolNamespaceCollection namespaces;
 
     for (auto *startNode : llvm::make_early_inc_range(instanceGraph)) {
       if (handled.contains(startNode->getModule().getOperation()))
@@ -180,26 +191,25 @@ public:
           auto inst = dyn_cast_or_null<hw::InstanceOp>(instRecord->getInstance().getOperation());
           if (inst) {
             bool isLastModuleUse = --numUsesLeft == 0;
-            if (inlineInst(inst, mod, isLastModuleUse)) {
-              return;
-            }
+            if (failed(inlineInst(inst, mod, isLastModuleUse, namespaces)))
+              return signalPassFailure();
 
             inst.erase();
-            if (isLastModuleUse) {
+            if (isLastModuleUse)
               mod->erase();
-            }
           } else {
-            /* Public module => We have to keep it. But we can inline the one instance if there is one */
+            /* Keep public modules, but inline their sole child when unshared */
             hw::InstanceOp topInstOp;
             mod.walk([&](hw::InstanceOp op) { topInstOp = op; });
             if (topInstOp == nullptr)
               continue;
 
-            auto instMod = getModuleOp(topInstOp);
-            if (inlineInst(topInstOp, instMod, true))
-              return;
-            // std::string newName = (mod.getName() + "_" + instMod.getModuleName()).str();
-            // mod.setName(newName);
+            auto *instNode = instanceGraph.lookup(topInstOp.getModuleNameAttr().getAttr());
+            auto instMod = dyn_cast<hw::HWModuleOp>(instNode->getModule().getOperation());
+            if (!instMod || instMod->getAttr(KEEP) || instNode->getNumUses() != 1)
+              continue;
+            if (failed(inlineInst(topInstOp, instMod, true, namespaces, instMod.getModuleNameAttr())))
+              return signalPassFailure();
             mod.setName(instMod.getModuleName());
 
             topInstOp.erase();

@@ -1,14 +1,4 @@
-// RUN: cosim-gen-opt --hw-inline-trivial %s | FileCheck %s
-
-// Test hw-inline-trivial pass
-// This pass inlines modules that have no logic (trivial modules)
-// Note: Pass considers modules trivial only if they contain:
-// - Only OutputOp with no operands, OR
-// - WireOp, ConstantOp, ConstClockOp, and at most one InstanceOp
-
-// =============================================================================
-// Test 1: Basic trivial module inlining
-// =============================================================================
+// RUN: cosim-gen-opt --split-input-file --hw-inline-trivial %s | FileCheck %s
 
 // CHECK-LABEL: hw.module @top
 // CHECK-NOT: hw.instance
@@ -30,10 +20,6 @@ hw.module private @nonTrivial(in %a : i32, out y : i32) {
 hw.module private @trivial(in %a : i32, out y : i32) {
   hw.output %a : i32
 }
-
-// =============================================================================
-// Test 2: Comprehensive trivial module scenarios
-// =============================================================================
 
 module {
 // @topWithTrivial inlines @trivialForward, resulting in direct forwarding
@@ -98,4 +84,87 @@ hw.module @nonTrivialLogic(in %x : i32, out y : i32) {
   %0 = comb.add %x, %x : i32
   hw.output %0 : i32
 }
+}
+
+hw.module private @innerSymLeaf(in %a : i1, out b : i1) {
+  %w = hw.wire %a sym @w : i1
+  hw.output %w : i1
+}
+
+// CHECK-LABEL: hw.module @innerSymTop
+// CHECK-DAG: hw.wire %a sym @{{[a-z_0-9]+}} name "u0/w"
+// CHECK-DAG: hw.wire %a sym @{{[a-z_0-9]+}} name "u1/w"
+hw.module @innerSymTop(in %a : i1, out x : i1, out y : i1) {
+  %0 = hw.instance "u0" @innerSymLeaf(a: %a : i1) -> (b: i1)
+  %1 = hw.instance "u1" @innerSymLeaf(a: %a : i1) -> (b: i1)
+  hw.output %0, %1 : i1, i1
+}
+
+// CHECK-LABEL: hw.module @publicWrapper
+// CHECK: hw.instance "c" @sharedChild
+hw.module @publicWrapper(in %a : i1, out b : i1) {
+  %0 = hw.instance "c" @sharedChild(a: %a: i1) -> (b: i1)
+  hw.output %0 : i1
+}
+
+hw.module @otherUser(in %a : i1, out b : i1) {
+  %0 = hw.instance "c" @sharedChild(a: %a: i1) -> (b: i1)
+  %1 = comb.xor %0, %a : i1
+  hw.output %1 : i1
+}
+
+// CHECK-LABEL: hw.module private @sharedChild
+hw.module private @sharedChild(in %a : i1, out b : i1) {
+  %0 = comb.and %a, %a : i1
+  hw.output %0 : i1
+}
+
+emit.fragment @fragParent {
+}
+emit.fragment @fragChild {
+}
+
+// CHECK-LABEL: hw.module @fragmentTop
+// CHECK-SAME: emit.fragments = [@fragChild, @fragParent]
+hw.module @fragmentTop(in %a : i1, out b : i1) attributes {emit.fragments = [@fragParent]} {
+  %0 = hw.instance "c" @fragmentChild(a: %a: i1) -> (b: i1)
+  %1 = comb.xor %0, %a : i1
+  hw.output %1 : i1
+}
+
+hw.module private @fragmentChild(in %a : i1, out b : i1) attributes {emit.fragments = [@fragChild]} {
+  hw.output %a : i1
+}
+
+// -----
+
+hw.module private @fieldSymbols(in %a: !hw.struct<x: i1, y: i1>, out b: !hw.struct<x: i1, y: i1>) {
+  %0 = hw.wire %a sym [<@field,1,private>] : !hw.struct<x: i1, y: i1>
+  %1 = hw.wire %0 sym [<@whole,0,private>, <@part,2,nested>] : !hw.struct<x: i1, y: i1>
+  hw.output %1 : !hw.struct<x: i1, y: i1>
+}
+
+// CHECK-LABEL: hw.module @fieldSymbolTop
+// CHECK: hw.wire %{{.*}} sym [<@field_0,1,private>]
+// CHECK: hw.wire %{{.*}} sym [<@whole_0,0,private>, <@part_0,2,nested>]
+hw.module @fieldSymbolTop(in %a: !hw.struct<x: i1, y: i1>, out b: !hw.struct<x: i1, y: i1>) {
+  %0 = hw.wire %a sym [<@whole,0,public>, <@field,1,public>, <@part,2,public>] : !hw.struct<x: i1, y: i1>
+  %1 = hw.instance "u" @fieldSymbols(a: %0: !hw.struct<x: i1, y: i1>) -> (b: !hw.struct<x: i1, y: i1>)
+  hw.output %1 : !hw.struct<x: i1, y: i1>
+}
+
+// -----
+
+hw.module @wrapper(in %a: !hw.struct<x: i1>, out b: !hw.struct<x: i1>) {
+  %0 = hw.instance "u" @referencedChild(a: %a: !hw.struct<x: i1>) -> (b: !hw.struct<x: i1>)
+  hw.output %0 : !hw.struct<x: i1>
+}
+
+// CHECK-LABEL: hw.module @referencedChild
+// CHECK: hw.wire %a sym [<@whole,0,private>, <@field,1,nested>]
+// CHECK: symbols = [#hw.innerNameRef<@referencedChild::@whole>, #hw.innerNameRef<@referencedChild::@field>]
+hw.module private @referencedChild(in %a: !hw.struct<x: i1>, out b: !hw.struct<x: i1>) {
+  %0 = hw.wire %a sym [<@whole,0,private>, <@field,1,nested>] : !hw.struct<x: i1>
+  sv.verbatim "// {{0}} {{1}}" {symbols = [#hw.innerNameRef<@referencedChild::@whole>, #hw.innerNameRef<@referencedChild::@field>]}
+  hw.output %0 : !hw.struct<x: i1>
 }
