@@ -28,5 +28,5 @@ at `build/components/<name>/build-<backend>/sim`. `cosim.json` and `RocketSoC.dt
 each component's interfaces and dts mapping — see
 [`../cosim-gen-cli/README.md#components`](../cosim-gen-cli/README.md#components) for the
 field reference and
-[`../cosim-gen-cli/README.md#how-cosim-build-works`](../cosim-gen-cli/README.md#how-cosim-build-works)
-for what the build actually does per component.
+[`../cosim-gen-cli/README.md#build-output`](../cosim-gen-cli/README.md#build-output)
+for what the build writes per component.
