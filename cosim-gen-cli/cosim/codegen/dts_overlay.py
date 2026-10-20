@@ -115,6 +115,18 @@ def _node_interrupts(tree: Devicetree, node) -> tuple[str, list]:
     return intc_path, []
 
 
+def _reg_cells(value: int, num_cells: int) -> str:
+    """`value` as `num_cells` 32-bit hex cells, most significant first."""
+    cells = []
+    rest = value
+    for _ in range(num_cells):
+        cells.insert(0, hex(rest & 0xFFFFFFFF))
+        rest >>= 32
+    if rest:
+        raise RuntimeError(f"reg value {hex(value)} doesn't fit in {num_cells} cell(s)")
+    return " ".join(cells)
+
+
 def _bus_reg_windows(node) -> list:
     """(address, size) pairs of the node's `reg`, one per slave bus in order."""
     if node is None:
@@ -135,7 +147,7 @@ class _SlaveNode:
     label: str  # dts label, e.g. "tlslave_TLUART_uart_0_auto_control_xing_in"
     node_name: str  # the dts node name/re-opening, e.g. "serial@64000000"
     index: int  # remote-port wire index (this bus's position among slave buses)
-    registers: str  # "0xADDR 0xSIZE", already hex-formatted for the template
+    registers: str  # the `reg` cells, hex-formatted for the template
 
 
 @dataclass
@@ -156,10 +168,14 @@ def _build_overlay_ctx(
 ) -> _OverlayCtx:
     node = resolve_component_node(tree, comp)
     intc_path, allIntrs = _node_interrupts(tree, node)
+    cells_per_irq = 1
+    if allIntrs:
+        cells_per_irq = tree.get_by_path(intc_path).get_field("#interrupt-cells") or 1
     outIntrs = [s for s in typedIO.intrs if s.typ == StateType.OUTPUT]
-    if len(allIntrs) != len(outIntrs):
+    if len(allIntrs) != cells_per_irq * len(outIntrs):
         raise RuntimeError(
-            f"{name}: dts node has {len(allIntrs)} interrupt cell(s) but the component's "
+            f"{name}: dts node has {len(allIntrs)} interrupt cell(s) "
+            f"({cells_per_irq} per interrupt line) but the component's "
             f"extracted OUTPUT interrupt wires number {len(outIntrs)} - compat/dts_path likely "
             "points at the wrong node, or a declared interrupt's prefix/name is wrong"
         )
@@ -203,7 +219,9 @@ def _build_overlay_ctx(
             nodeName = (
                 baseName if len(tlSlave) == 1 else f"{baseName.split('@')[0]}@{addr:x}"
             )
-            registers = f"{hex(addr)} {hex(size)}"
+            addr_cells = _reg_cells(addr, node.address_cells())
+            size_cells = _reg_cells(size, node.size_cells())
+            registers = f"{addr_cells} {size_cells}"
 
         ctx.slaves_by_path.setdefault(path, []).append(
             _SlaveNode(
