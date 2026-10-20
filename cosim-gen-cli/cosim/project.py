@@ -3,7 +3,6 @@ binary and remote-port channel; the whole design is built as one more unit."""
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import shutil
@@ -306,10 +305,6 @@ def build(cfg: Config, generate_only: bool = False) -> int:
     top_makefile = build_dir / "Makefile"
     top_makefile.write_text(_render_top_makefile(cfg, tools, build_dir, units))
 
-    overlay_components = [c.name for c in cfg.components if any(i.NEEDS_QEMU for i in c.interfaces)]
-    if overlay_components and cfg.design.dts:
-        (build_dir / "cosim_components.json").write_text(json.dumps(overlay_components) + "\n")
-
     if generate_only:
         return 0
 
@@ -431,14 +426,13 @@ def run(cfg: Config, mode: str, components: list[str] | None = None, backend: st
         dtb = _gen_dtb(cfg, tools, build_dir, components, backend)
         return _run_coupled(cfg, tools, build_dir, dtb, components, backend)
 
-    # mode == "cosim": every component that needs QEMU; COMPONENT args are ignored.
-    manifest_path = build_dir / "cosim_components.json"
-    if not manifest_path.exists():
+    # mode == "cosim": one sim process per coupled component, all sharing one QEMU.
+    comp_names = [c.name for c in cfg.components if c.needs_qemu]
+    if not comp_names:
         raise RuntimeError(
-            "No components need QEMU coupling (no bus/interrupt IO) - use `cosim run rtl` "
-            "or `cosim run` (a plain boot) instead."
+            "No declared component has bus/interrupt/gpio IO - nothing to couple. "
+            "Use `cosim run rtl` or `cosim run` (a plain boot) instead."
         )
-    comp_names = json.loads(manifest_path.read_text())
     dtb = _gen_dtb(cfg, tools, build_dir, comp_names, backend)
     return _run_coupled(cfg, tools, build_dir, dtb, comp_names, backend)
 
@@ -458,7 +452,6 @@ def clean(cfg: Config, all: bool = False) -> int:
         build_dir / "systemctlm",
         build_dir / "cosim.dts",
         build_dir / "cosim.dtb",
-        build_dir / "cosim_components.json",
         build_dir / "run.log",
     ]
     targets += [build_dir / f.name for f in _extra_files(cfg)]

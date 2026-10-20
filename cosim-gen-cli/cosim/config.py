@@ -183,6 +183,10 @@ class Component(UnitSettings):
         return f"{self.name}_TOP"
 
     @property
+    def needs_qemu(self) -> bool:
+        return any(i.NEEDS_QEMU for i in self.interfaces)
+
+    @property
     def ordered_interfaces(self) -> list[Interface]:
         """Interfaces by Interface.ORDER, keeping declaration order within a kind."""
         return sorted(self.interfaces, key=lambda i: i.ORDER)

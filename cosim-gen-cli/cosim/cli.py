@@ -79,10 +79,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     if args.list:
         print(f"Components declared in {args.config}:")
         for c in cfg.components:
-            needs_qemu = any(i.NEEDS_QEMU for i in c.interfaces)
             tag = (
                 "qemu-coupled (cosim run " + c.name + ")"
-                if needs_qemu
+                if c.needs_qemu
                 else "rtl-only (cosim run rtl " + c.name + ")"
             )
             print(f"  {c.name:<24} {tag}  [{c.type}]")
