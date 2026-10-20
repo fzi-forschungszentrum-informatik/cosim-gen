@@ -54,7 +54,7 @@ Any CIRCT install works:
   version [`Dockerfile`](Dockerfile) pins (`CIRCT_VERSION`):
 
   ```sh
-  CIRCT_VERSION=1.154.0
+  CIRCT_VERSION=1.162.0
   curl -fL -o /tmp/circt.tar.gz \
       "https://github.com/llvm/circt/releases/download/firtool-${CIRCT_VERSION}/circt-full-shared-linux-x64.tar.gz"
   mkdir -p ~/.local/opt/circt
@@ -68,7 +68,7 @@ build), or see [Toolchain resolution](#toolchain-resolution).
 
 ## Step 4: Verilator
 
-Tested with `v5.050`; any `v5.0+` should work.
+Tested with `v5.052`; any `v5.0+` should work.
 
 - **Distribution package**, if your distro ships a recent enough version.
 - **Build from source** — see [Verilator's own install
@@ -76,7 +76,7 @@ Tested with `v5.050`; any `v5.0+` should work.
   reference, what [`Dockerfile`](Dockerfile) does:
 
   ```sh
-  VERILATOR_VERSION=v5.050
+  VERILATOR_VERSION=v5.052
   git clone --branch "${VERILATOR_VERSION}" --depth 1 \
       https://github.com/verilator/verilator.git /tmp/verilator
   cd /tmp/verilator

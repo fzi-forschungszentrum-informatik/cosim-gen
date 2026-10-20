@@ -10,8 +10,8 @@
 FROM ubuntu:26.04 AS builder
 ENV DEBIAN_FRONTEND=noninteractive
 
-ARG CIRCT_VERSION=1.154.0
-ARG VERILATOR_VERSION=v5.050
+ARG CIRCT_VERSION=1.162.0
+ARG VERILATOR_VERSION=v5.052
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # common deps
