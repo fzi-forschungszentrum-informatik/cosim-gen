@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""C++ source formatting helpers shared by both backends: identifier
-sanitizing, include guards, and SystemC port types.
-
-The arcilator *state layout* formatters (Signal{}/Hierarchy{} literals, the
-`state+offset` view refs) live in arc_model.py instead - only the arcilator
-model header needs them."""
+"""C++ formatting helpers: identifier sanitizing, include guards and SystemC port types."""
 import re
 
 from .typedio import *

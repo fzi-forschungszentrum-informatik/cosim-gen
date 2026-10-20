@@ -1,10 +1,6 @@
 #!/usr/bin/env python3
-"""The QEMU device-tree overlay for a coupled component: the remote-port
-memory-master/slave nodes its buses become, and the wire node its interrupts
-and gpio share.
-
-Backend-agnostic - the dts describes the QEMU side of the channel, which
-doesn't care whether the RTL behind it is arcilator- or verilator-built."""
+"""The QEMU device-tree overlay of a coupled component: remote-port nodes for its
+buses and one wire node for its interrupts and gpio."""
 
 import subprocess
 from dataclasses import dataclass, field
@@ -66,12 +62,7 @@ def getNodePhandles(tree: Devicetree):
 
 
 def resolve_component_node(tree: Devicetree, comp: Component):
-    """The single dts node this component binds to, via comp.dts_path
-    (an explicit node path) or comp.compat (a "compatible" match) - or None
-    if it declares neither, meaning it isn't wired to anything in the base
-    platform dts. A node can carry several buses (one reg/reg-names window
-    each) and several interrupts - this binding lives once per component,
-    not per bus (see Component.compat/dts_path in config.py)."""
+    """The dts node selected by comp.dts_path or comp.compat; None if neither is set."""
     if comp.dts_path:
         node = tree.get_by_path(comp.dts_path)
         if node is None:
@@ -85,11 +76,7 @@ def resolve_component_node(tree: Devicetree, comp: Component):
 
 
 def _resolve_intc_ref(tree: Devicetree, ref) -> "ast.node.Node":
-    """The dts node a phandle-shaped property value refers to, regardless of
-    which of pydevicetree's three reference shapes it came out as (raw
-    phandle int, string reference, or LabelReference - dtc's `-O dts`
-    round-trip normally yields LabelReference, but all three show up in the
-    wild)."""
+    """The node a phandle int, string or LabelReference refers to."""
     if type(ref) == int:
         return getNodePhandles(tree)[ref]
     if type(ref) in (str, ast.reference.LabelReference):
@@ -98,9 +85,7 @@ def _resolve_intc_ref(tree: Devicetree, ref) -> "ast.node.Node":
 
 
 def _node_interrupts(tree: Devicetree, node) -> tuple[str, list]:
-    """(interrupt-parent path, interrupt cells) for this component's one dts
-    node - `node=None` (no compat/dts_path declared) means no interrupt
-    binding at all."""
+    """(interrupt-parent path, interrupt cells) of `node`; no interrupts if None."""
     if node is None:
         return "TODO_SET_INTERRUPT_PARRENT", []
 
@@ -131,11 +116,7 @@ def _node_interrupts(tree: Devicetree, node) -> tuple[str, list]:
 
 
 def _bus_reg_windows(node) -> list:
-    """(address, size) pairs from this node's own `reg` property, in order -
-    assigned to this component's slave buses positionally, one window per
-    bus (matching the node's own reg-names order: a node with two buses has
-    `reg-names = "control", "control2"` and two (addr, size) pairs in `reg`,
-    one per attached bus)."""
+    """(address, size) pairs of the node's `reg`, one per slave bus in order."""
     if node is None:
         return []
     reg = node.get_reg()
@@ -173,10 +154,6 @@ class _OverlayCtx:
 def _build_overlay_ctx(
     name: str, comp, typedIO: TypedIO, tree: Devicetree, sysBus: str
 ) -> _OverlayCtx:
-    """One component's own remote-port channel: its own RP node (own
-    chrdev-id, so its own unix socket under $MACHINEPATH), and its own local
-    bus/wire index space (0-based - safe because each component gets its own
-    sim process/QemuTLM instance, never shared with another component's)."""
     node = resolve_component_node(tree, comp)
     intc_path, allIntrs = _node_interrupts(tree, node)
     outIntrs = [s for s in typedIO.intrs if s.typ == StateType.OUTPUT]
@@ -196,22 +173,7 @@ def _build_overlay_ctx(
         rp_label=f"RP_{name}",
         chrdev_id=name.lower(),
         sys_bus=sysBus,
-        # One shared remote-port-gpio node/wire channel (QemuTLM only has one -
-        # see include/QemuTLM.h's single `rp_wires` at index 20): interrupts
-        # and gpio are both just bits in the same wire_in/wire_out array on
-        # the SystemC side (sim_main._build_ctx puts interrupt bits
-        # first, gpio bits after). The `interrupts` property only lists
-        # entries for the interrupt bits (allIntrs never includes gpio) - the
-        # gpio bits that follow in the same array are simply absent from that
-        # list, so QEMU leaves them as plain, PLIC-unrouted gpio wires
-        # without needing a second node or channel. The wires_in node itself
-        # is always emitted (see the template) even when allIntrs is empty
-        # (e.g. a bus-only component with no declared interrupts/gpio) -
-        # QemuTLM always registers rp_wires at index 20 regardless, so the
-        # dts needs a matching node for the remote-port handshake. But
-        # `interrupt-parent`/`interrupts` are only meaningful when there's at
-        # least one interrupt-routed bit - the template omits them (rather
-        # than pointing at a placeholder phandle) when `interrupts` is empty.
+        # Interrupts and gpio share one wire node; `interrupts` lists only the interrupt bits.
         intc_path=intc_path,
         interrupts=list(allIntrs),
         master_buses=[
@@ -237,11 +199,7 @@ def _build_overlay_ctx(
             baseName = pathToken[-1]
             path = "/".join(pathToken[:-1]) + "/"
             addr, size = reg_windows[i][:2]
-            # A lone slave bus reuses the node's own bare name, merging the
-            # remote-port properties into it in place. Multiple slave buses
-            # on the same node instead each get their own synthetic name
-            # (their own reg window's address) - they can't all re-open the
-            # one node under the same name without colliding.
+            # A lone slave bus reuses the node's name; several get one name per window.
             nodeName = (
                 baseName if len(tlSlave) == 1 else f"{baseName.split('@')[0]}@{addr:x}"
             )
@@ -260,9 +218,7 @@ def _build_overlay_ctx(
 
 
 def open_base_tree(inputDtsPath: str, dtc: str = "dtc") -> tuple[Devicetree, str]:
-    """Parse the base platform dts once and locate its system bus node - the
-    (tree, sysBus) pair is reused across every component's own overlay
-    fragment in one `cosim run` (see gen_component_dts)."""
+    """(tree, system bus path) of the base platform dts."""
     tree = parseDts(inputDtsPath, dtc)
     sysBus = (
         getSingleCompat(tree, r"freechips,rocketchip-unknown-soc|simple-bus").get_path()
@@ -274,21 +230,13 @@ def open_base_tree(inputDtsPath: str, dtc: str = "dtc") -> tuple[Devicetree, str
 def gen_component_dts(
     name: str, comp: Component, typedIO: TypedIO, tree: Devicetree, sysBus: str
 ) -> str:
-    """One component's own standalone overlay fragment: its own `&{/} {...}`
-    block (RP node + wires) plus any per-path `&{path} {...}` blocks for its
-    bus slave nodes. No `/include/` of the base dts here - written to that
-    component's own build dir and pulled in by the top-level cosim.dts for
-    whichever run actually couples it (see gen_run_dts / project.py)."""
+    """The overlay fragment of one component, without the base dts."""
     ctx = _build_overlay_ctx(name, comp, typedIO, tree, sysBus)
     return env().get_template("component_overlay.dts.j2").render(ctx=ctx)
 
 
 def gen_run_dts(base_dts_name: str, component_overlay_paths: list[str]) -> str:
-    """The top-level dts for one `cosim run`: the base platform dts plus
-    `/include/` of exactly the coupled components' own overlay files (paths
-    relative to build_dir, where this file itself lives - dtc resolves plain
-    `/include/` relative to the including file's own directory). An empty
-    `component_overlay_paths` is a plain boot: design.dts as-is, no overlay."""
+    """The base dts plus /include/s of the given overlays (relative to build_dir)."""
     return (
         env()
         .get_template("run.dts.j2")

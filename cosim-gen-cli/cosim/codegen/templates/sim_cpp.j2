@@ -7,10 +7,7 @@
 {% endfor %}
 {% endif %}
 
-// One representative period, used only for the max_cycles run-length
-// scaling below - every declared clock (either backend, possibly several)
-// gets its own independent sc_clock straight from its own init_entries;
-// this macro isn't wired into any clock's actual period.
+// Only scales max_cycles; every clock has its own period.
 #define CLOCK_MHZ {{ ctx.anchor_freq_mhz }}
 
 #ifndef TRACE

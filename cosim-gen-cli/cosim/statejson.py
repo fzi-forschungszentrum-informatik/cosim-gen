@@ -1,11 +1,5 @@
-"""The state description JSON that cosim-extract (and arcilator) emit for a
-lowered design: a flat list of named signals with their bit offset, width and
-kind, plus the helpers for grouping them back into an instance hierarchy.
-
-Backend-agnostic and dependency-free on purpose - it sits below both
-`cosim.interfaces` (which classifies these signals into declared interfaces)
-and `cosim.codegen` (which emits C++ from them), so neither has to import the
-other to talk about a port."""
+"""The state json of cosim-extract and arcilator: named signals with bit offset,
+width and kind, and helpers to group them into an instance hierarchy."""
 
 from __future__ import annotations
 
@@ -93,14 +87,7 @@ def removeIo(ioList: list[StateInfo], rem: list[StateInfo]) -> list[StateInfo]:
 
 
 def short_type(state: StateInfo) -> str:
-    # Bucket boundaries follow verilator's own `-sc` SystemC port codegen (any
-    # multi-bit signal <=32 bits becomes sc_in/sc_out<uint32_t>, never a
-    # narrower uintN_t) - not just an arbitrary "smallest type that fits"
-    # choice. This also picks the arcilator wrapper's own port types (which is
-    # otherwise free to choose anything, since that wrapper is entirely our
-    # own codegen); matching verilator's convention here keeps both backends'
-    # generated sim.cpp connecting to the same signal types on both sides of
-    # the bind().
+    # Same widths as verilator's -sc ports (<=32 bits: uint32_t), so both backends bind alike.
     if state.numBits <= 1:
         return "bool"
     for bits, ty in [(32, "uint32_t"), (64, "uint64_t")]:

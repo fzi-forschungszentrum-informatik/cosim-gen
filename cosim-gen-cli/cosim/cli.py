@@ -89,10 +89,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"  {'(whole design)':<24} rtl-only (cosim run rtl)")
         return 0
 
-    # 'rtl' is a reserved leading token, not a component name: `cosim run rtl
-    # [COMPONENT]` runs standalone, no QEMU. Anything else - zero or more
-    # component names, or none at all - couples QEMU to exactly those (or to
-    # nothing, for a plain boot).
+    # `cosim run rtl [COMPONENT]` runs without QEMU; other args name the components to couple.
     if args.args and args.args[0] == "rtl":
         if args.all:
             raise RuntimeError(

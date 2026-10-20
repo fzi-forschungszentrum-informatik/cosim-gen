@@ -99,18 +99,11 @@ UNIT_SETTINGS = tuple(f.name for f in fields(UnitSettings))
 @dataclass
 class DesignConfig:
     input: Path
-    # dts is only needed to generate the QEMU device-tree overlay - a design
-    # with no bus/interrupt IO can be built and run in "rtl" mode without it.
-    # The QEMU-side dts binding lives on the owning component's own
-    # 'compat'/'dts_path' fields, not per-bus - see Component below.
+    # Only needed for the QEMU device tree.
     dts: Path | None = None
     seqmem: Path | None = None
     annotations: Path | None = None
-    # Every backend `cosim build` builds a unit for - `cosim run --backend`
-    # then picks which built variant to execute (default: the first one
-    # listed). Required, no default: which backends a design actually lowers
-    # on is a fact about *this design* (e.g. async-reset registers arcilator
-    # can't lower), not a build-tuning knob, and not something safe to guess.
+    # Backends `cosim build` builds; `cosim run` defaults to the first.
     supported_backends: list[str] = field(default_factory=list)
 
     @staticmethod
@@ -153,19 +146,10 @@ class DesignConfig:
 
 @dataclass
 class QemuConfig:
-    # ELF files passed to QEMU via `-device loader`, in order (bootrom, test
-    # image, ...).
+    # ELF files passed to QEMU via `-device loader`, in order.
     elfs: list[Path] = field(default_factory=list)
-    # Extra args appended verbatim to every qemu invocation
-    # (plain boot and coupled) - an escape hatch for anything project.py
-    # doesn't otherwise expose a dedicated knob for.
     extra_args: list = field(default_factory=list)
-    # QEMU's own -sync-quantum for run-qemu-coupled: how often *QEMU itself*
-    # syncs with the coupled remote-port sim processes. Independent of any
-    # component's own sync_quantum (that governs how often each RTL sim
-    # syncs on its side, and can differ per component) - QEMU has one global
-    # knob, so this is its own setting, not derived from components. None
-    # falls back to the top-level Config.sync_quantum default.
+    # QEMU's -sync-quantum; None falls back to Config.sync_quantum.
     sync_quantum: int | None = None
 
     @staticmethod
@@ -179,9 +163,7 @@ class QemuConfig:
 
 @dataclass(kw_only=True)
 class Component(UnitSettings):
-    # Every port this component exposes, one entry per interface, each tagged
-    # with its own 'kind' - see cosim/interfaces/. Always non-empty: a clock
-    # is required (it's the anchor the instance prefix is derived from).
+    # Always contains a clock, from which the instance prefix is derived.
     interfaces: list[Interface] = field(default_factory=list)
     type: str | None = None
     path: str | None = None
@@ -199,11 +181,7 @@ class Component(UnitSettings):
 
     @property
     def ordered_interfaces(self) -> list[Interface]:
-        """By kind (Interface.ORDER), not by declaration order - so a
-        prefix-matched gpio can't shadow a bus just because it was listed
-        first. Stable, so order *within* a kind stays the declaration's: bus
-        order lines up with the dts node's reg windows and the QemuTLM index
-        spaces, interrupt order with its interrupt cells and wire indices."""
+        """Interfaces by Interface.ORDER, keeping declaration order within a kind."""
         return sorted(self.interfaces, key=lambda i: i.ORDER)
 
     @property
@@ -220,22 +198,13 @@ class Component(UnitSettings):
 
     @property
     def io_regex(self) -> str:
-        """The cosim-extract --port regex, derived from every declared signal
-        name - never hand-authored. clock/reset and any interrupt or gpio
-        declared via 'name' are exact single-port matches; buses (always) and
-        anything declared via 'prefix' expand to several leaf ports
-        post-extraction (a TileLink bus's `_a_valid`/`_a_bits_opcode`/..., a
-        bundled interrupt's `_sync_0..N` vector)."""
+        """The cosim-extract --port regex of all declared interfaces."""
         return "|".join(p for i in self.ordered_interfaces for p in i.port_patterns())
 
     @staticmethod
     def load(root: Path, d: dict, *, require_type_path: bool = True) -> Component:
-        """require_type_path=False is the top-level 'soc_rtl' declaration (the
-        whole, un-extracted design) rather than a components[] entry: no
-        type/path (nothing to extract), and only clock/reset interfaces plus
-        no compat/dts_path - there's no QEMU bus/interrupt coupling path for
-        the whole-design unit (build()'s QEMU-overlay detection, _gen_dtb, and
-        _run_coupled all only ever look at components[])."""
+        """`require_type_path=False` loads the top-level 'soc_rtl' declaration: no
+        type/path, only clock/reset interfaces, no compat/dts_path."""
         what = f"component {d.get('type')!r}" if require_type_path else "soc_rtl"
         if require_type_path:
             for key in ("type", "path"):
@@ -277,11 +246,6 @@ class Component(UnitSettings):
                     "design has no QEMU dts binding - see cosim-gen-cli/README.md")
 
         path = d.get("path", "")
-        # Last hierarchy segment of the instance path is the real instance
-        # name in the design (e.g. "topDesign/topMod/uart_0" -> "uart_0");
-        # falls back to `type` if there's no '/' to split on. Not computed at
-        # all for 'soc_rtl' (require_type_path=False) - it's never looked up
-        # by name.
         default_name = path.rsplit("/", 1)[-1] if path else d.get("type")
         name = d.get("name", default_name) if require_type_path else None
 
@@ -328,20 +292,12 @@ class Config(UnitSettings):
     root: Path
     design: DesignConfig
     qemu: QemuConfig
-    # make -jN for every generated Makefile invocation (design lowering,
-    # component extraction, systemctlm, link, dtb). None => os.cpu_count().
+    # make -j for every make call; None means os.cpu_count().
     jobs: str | None = None
-    # The whole, un-extracted design's own clock/reset/sync_quantum/
-    # max_cycles/extra_args/extra_files declaration - None if not given (the
-    # whole-design build then falls back to name-heuristic clock/reset
-    # detection and plain top-level defaults, same as before this field
-    # existed).
     soc_rtl: Component | None = None
     components: list[Component] = field(default_factory=list)
     toolchain: ToolchainConfig = field(default_factory=ToolchainConfig)
-    # Absolute path to the cosim.json this was loaded from - the codegen make
-    # recipe needs it to re-read the component declaration (--config), and it
-    # may not be named "cosim.json" (a -C override).
+    # The loaded cosim.json, which may have another name (-C).
     path: Path | None = None
 
     TOP_LEVEL_KEYS: ClassVar[tuple[str, ...]] = (

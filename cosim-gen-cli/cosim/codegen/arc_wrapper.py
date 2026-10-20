@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Arcilator-only: the A<Model>.h SystemC wrapper around a lowered arcilator
-model, giving it the sc_in/sc_out ports and the clock-edge eval loop that
-sim.cpp binds to.
-
-Verilator needs no equivalent - its own V<Top>.h is already an sc_module."""
+"""Arcilator only: the A<Model>.h SystemC wrapper around a lowered model."""
 from .format import *
 from .jinja import env
 from .typedio import *

@@ -1,13 +1,5 @@
-"""Build/run orchestration: renders small generated Makefiles around the
-mk/*.mk engine, drives the codegen module to assemble each component's own
-sim.cpp + the combined QEMU overlay, and links the results.
-
-Each extracted component gets its own sim binary and its own remote-port
-channel (see codegen/sim_main.py, codegen/dts_overlay.py) - they
-are never assembled into one shared Top/QemuTLM. The "whole design as the
-model" case (cosim.json has no components) is the degenerate one-component
-case and keeps producing a single build/sim, same as before.
-"""
+"""Build/run orchestration around the mk/*.mk engine. Each component gets its own sim
+binary and remote-port channel; the whole design is built as one more unit."""
 
 from __future__ import annotations
 
@@ -29,12 +21,7 @@ from .toolchain import ResolvedToolchain, resolve
 
 
 def _write_if_changed(path: Path, content: str) -> None:
-    # Leave the file's mtime alone when content is unchanged, so config.mk's
-    # own mtime is a meaningful staleness signal for the make rules keyed on
-    # it (see mk/component.mk's extraction targets) - otherwise every `cosim
-    # build` would bump it and force a full re-extraction even when nothing
-    # in cosim.json changed. Same pattern as codegen/main.py's own
-    # _write_if_changed, for the same reason.
+    # Keeps the mtime when unchanged; make rules use it as a staleness signal.
     if not path.exists() or path.read_text() != content:
         path.write_text(content)
 
@@ -48,26 +35,16 @@ def _run_make(build_dir: Path, name: str, variables: dict[str, str], includes: l
               targets: list[str], jobs: int | None = None):
     build_dir.mkdir(parents=True, exist_ok=True)
     mk_path = build_dir / f"_{name}.mk"
-    # Escape literal "$" as "$$" - Make's ":=" assignment expands "$" immediately
-    # while parsing this file, so an unescaped "$" in e.g. a component's IO
-    # regex (which is full of "$" anchors) gets silently eaten before the
-    # recipe that actually uses the variable ever runs.
+    # ":=" expands "$" at parse time, which would eat regex anchors.
     lines = [f"{k} := {str(v).replace('$', '$$')}" for k, v in variables.items() if v is not None]
     lines += [f"include {i}" for i in includes]
     mk_path.write_text("\n".join(lines) + "\n")
-    # Run from build_dir, not the caller's cwd: firtool resolves a
-    # MemoryFileInlineAnnotation's filename (a bare relative name, e.g.
-    # "bootrom.mem") against its own working directory.
+    # firtool resolves MemoryFileInlineAnnotation filenames against its cwd.
     _run(["make", "-f", mk_path, f"-j{jobs or os.cpu_count() or 1}"] + targets, cwd=build_dir)
 
 
 def _design_top_name(design_input: Path) -> str:
-    # The whole-design model's top module name, needed at makefile-generation
-    # time - i.e. *before* design.hw.mlir is built by the single make call - so
-    # it's read from the input, not the (not-yet-existing) output. firtool keeps
-    # the FIRRTL circuit's main module as the sole public hw.module, so a .fir's
-    # `circuit <Name>` is the lowered top; an already-lowered .mlir input is
-    # grepped for its public hw.module directly.
+    # Read from the input: design.hw.mlir doesn't exist yet when the Makefiles are written.
     text = design_input.read_text()
     if design_input.name.endswith(".mlir"):
         matches = re.findall(r"^\s*hw\.module\s+@(\w+)\(", text, re.MULTILINE)
@@ -87,25 +64,14 @@ def _design_top_name(design_input: Path) -> str:
 
 
 def _unit_spec(cfg: Config, comp, whole: bool, build_dir: Path) -> dict:
-    """One entry in the build graph: a declared component (whole=False), or
-    the whole, un-extracted design as its own standalone model (whole=True) -
-    a pseudo-component with no path/io to extract by, living under
-    components/<TopName>/ just like any real one, built alongside the
-    components rather than instead of them. `comp` is None for a whole-design
-    build with no cosim.json 'soc_rtl' declaration - `whole` (not `comp is
-    None`) drives name/path/io_regex/top_name since soc_rtl (when given) is a
-    real Component that still describes the un-extracted whole design, not an
-    extracted one. One unit serves every backend in design.supported_backends
-    at once (see mk/component.mk) - `cosim build` builds all of them from this
-    one directory; `cosim run --backend` picks which built variant to
-    execute."""
+    """Build-graph entry for a declared component, or for the whole design when `whole`
+    (`comp` is then soc_rtl or None)."""
     name = _design_top_name(cfg.design.input) if whole else comp.name
     return {
         "name": name,
         "dir": build_dir / "components" / name,
         "whole": whole,
-        # Nothing renames the whole design's top, so TOP_NAME is its own name;
-        # an extracted component is renamed to <name>_TOP by cosim-extract.
+        # cosim-extract renames an extracted component's top; the whole design keeps its own.
         "top_name": name if whole else comp.top_name,
         "path": "" if whole else comp.path,
         "io_regex": "" if whole else comp.io_regex,
@@ -116,15 +82,8 @@ def _unit_spec(cfg: Config, comp, whole: bool, build_dir: Path) -> dict:
 
 def _render_common_mk(cfg: Config, tools: ResolvedToolchain, build_dir: Path,
                       design_hw_mlir: Path, verilator_root: str) -> str:
-    """Everything every unit's own config.mk would otherwise repeat verbatim,
-    regardless of which backend that unit builds: the resolved toolchain, and
-    paths fixed for the whole `cosim build` (the lowered design,
-    libsystemctlm, this checkout's mk/include/third_party dirs). One file at
-    the build root instead of N identical copies - each unit's own config.mk
-    includes it (see _render_config_mk) rather than restating it, and the top
-    build/Makefile does the same instead of resolving the overlapping subset
-    (COSIM_MK_DIR/SYSTEMC_INCLUDE/SYSTEMC_LIBDIR/DESIGN_HW_MLIR/FIRTOOL) a
-    second time."""
+    """common.mk: the resolved toolchain and build-wide paths, included by every unit's
+    config.mk and the top Makefile."""
     # toolchain key -> the make variable mk/*.mk expects.
     _MAKE_VARS = {
         "cosim_extract": "COSIM_EXTRACT",
@@ -167,17 +126,8 @@ def _render_common_mk(cfg: Config, tools: ResolvedToolchain, build_dir: Path,
 
 
 def _render_config_mk(cfg: Config, unit: dict) -> str:
-    """The machine-owned half of a unit's build: regenerated every `cosim
-    build`, so cosim.json edits (a moved --path, a new bus, a different
-    freq_mhz) always take effect. Never hand-edit this - see the unit's own
-    Makefile for the hooks meant to be edited. Everything NOT specific to
-    this one unit lives in common.mk instead (see _render_common_mk) -
-    SUPPORTED_BACKENDS itself is here, not there, since which backends this
-    build supports is a whole-project fact but mk/component.mk needs it
-    per-unit to know which of its always-defined backend rule blocks `all`
-    should actually depend on."""
-    # `$` in the port regex is a make metachar - escape to `$$` so it survives
-    # to the recipe verbatim (the anchors matter to cosim-extract's --port).
+    """A unit's config.mk, regenerated every `cosim build`."""
+    # Escape make's "$" so the regex anchors survive.
     io = unit["io_regex"].replace("$", "$$")
     if unit["whole"]:
         io_flags = f"--config {cfg.path} --soc-rtl" if cfg.soc_rtl is not None else ""
@@ -247,17 +197,9 @@ def _render_qemu_makefile(cfg: Config) -> str:
 
 def _render_top_makefile(cfg: Config, tools: ResolvedToolchain, build_dir: Path,
                          units: list[dict]) -> str:
-    """The top build/Makefile: builds the shared prerequisites (design
-    lowering, libsystemctlm) once, then recurses into each unit's own
-    Makefile (`make -C components/<name>`) - each unit is independently
-    buildable/runnable, and 'one cosim build' is still one `make` process
-    driving the whole recursive tree. Each unit's own Makefile in turn builds
-    every backend in design.supported_backends itself (see mk/component.mk) -
-    there's no backend-level fan-out here."""
+    """The top build/Makefile: lowers the design, builds libsystemctlm, then makes every unit."""
     lowered_input = cfg.design.input.name.endswith(".mlir")
-    # firrtl-keep-interfaces runs during firtool, before cosim-extract ever
-    # renames a component to <type>_TOP - so it must match on the original
-    # FIRRTL module name (c.type), not the post-extraction top_name.
+    # firrtl-keep-interfaces runs before cosim-extract's <type>_TOP rename.
     type_names = " ".join(c.type for c in cfg.components)
 
     lines = [
@@ -267,9 +209,7 @@ def _render_top_makefile(cfg: Config, tools: ResolvedToolchain, build_dir: Path,
         ".DEFAULT_GOAL := all",
     ]
     if not lowered_input:
-        # Design lowering is a rule here (not a pre-make Python step), so a
-        # .fir edit propagates to every unit through this one make process.
-        # FIRTOOL itself already came from common.mk's include above.
+        # A make rule, so a .fir edit propagates to every unit.
         lines += [
             f"DESIGN_INPUT := {cfg.design.input}",
             f"COSIM_PLUGIN := {tools['cosim_plugin'] if type_names else ''}",
@@ -286,18 +226,14 @@ def _render_top_makefile(cfg: Config, tools: ResolvedToolchain, build_dir: Path,
         ".PHONY: all $(UNITS)",
         "all: $(UNITS)",
         "$(UNITS): $(DESIGN_HW_MLIR) $(LIBSYSTEMCTLM)",
-        # '+' marks this as a sub-make so each unit's own make invocation
-        # shares our jobserver - units build in parallel under one `-jN`.
+        # '+' shares the jobserver with each unit's sub-make.
         "\t+$(MAKE) -C components/$@",
     ]
     return "\n".join(lines) + "\n"
 
 
 def _extra_files(cfg: Config) -> list[Path]:
-    """Every file staged into build_dir before firtool runs: each component's
-    (and soc_rtl's) own extra_files. Additive, not overriding - there's one
-    firtool call for the whole design, so a component's extra_files just
-    documents which files it cares about, not a separate staging location."""
+    """Every component's and soc_rtl's extra_files, staged into build_dir."""
     files = [f for c in cfg.components for f in c.extra_files]
     if cfg.soc_rtl is not None:
         files += cfg.soc_rtl.extra_files
@@ -317,22 +253,13 @@ def _reject_basename_collisions(files: list[Path]) -> None:
 
 
 def _missing_required_tools(cfg: Config, tools: ResolvedToolchain, lowered_input: bool) -> list[str]:
-    """Every tool this project's `cosim build` will actually shell out to,
-    given every backend in design.supported_backends and whether design.input
-    still needs firtool lowering. Checked up front so a missing one fails
-    with a clear message right here - _render_common_mk/_render_top_makefile
-    write tool paths straight into generated Makefiles with no None-check of
-    their own, so an unresolved tool otherwise surfaces much later as a
-    cryptic 'sh: None: not found' or '$(error ...)' from deep inside a make
-    recipe."""
+    """The unresolved tools that `cosim build` needs for the configured backends and input."""
     backends = cfg.design.supported_backends
     required = ["cosim_extract", "systemc_include", "systemc_lib"]
-    # firtool lowers the whole design (unless it's already .mlir) and, for
-    # the verilator backend, also --split-verilog's every unit regardless.
+    # verilator's --split-verilog needs firtool even for a lowered input.
     if not lowered_input or "verilator" in backends:
         required.append("firtool")
-    # Only needed for the firrtl-keep-interfaces pass, itself only run
-    # during whole-design lowering when components[] exist to keep alive.
+    # firrtl-keep-interfaces only runs when lowering with components.
     if not lowered_input and cfg.components:
         required.append("cosim_plugin")
     if "arcilator" in backends:
@@ -356,8 +283,7 @@ def build(cfg: Config, generate_only: bool = False) -> int:
         )
         raise RuntimeError(f"cosim build: required tool(s) not found - {', '.join(missing)}\n{hints}")
 
-    # firtool resolves a MemoryFileInlineAnnotation's bare relative filename
-    # (e.g. "bootrom.mem") against its own cwd, which is build_dir when make runs.
+    # firtool resolves MemoryFileInlineAnnotation filenames against build_dir.
     _reject_basename_collisions(_extra_files(cfg))
     for f in _extra_files(cfg):
         shutil.copy2(f, build_dir / f.name)
@@ -374,18 +300,12 @@ def build(cfg: Config, generate_only: bool = False) -> int:
             check=True, capture_output=True, text=True,
         ).stdout.strip()
 
-    # Shared by every unit's own config.mk (see _render_common_mk) instead of
-    # each repeating an identical copy - written once, before the per-unit
-    # loop below.
     _write_if_changed(
         build_dir / "common.mk",
         _render_common_mk(cfg, tools, build_dir, design_hw_mlir, verilator_root),
     )
 
-    # One unit per component, plus one for the whole design (soc_rtl) - each
-    # builds every design.supported_backends entry itself (see
-    # mk/component.mk); `cosim run --backend` picks which built variant to
-    # execute.
+    # One unit per component, plus one for the whole design (soc_rtl).
     comps: list = [c for c in cfg.components] + [cfg.soc_rtl]
     wholes = [False] * len(cfg.components) + [True]
     units = [_unit_spec(cfg, comp, whole, build_dir) for comp, whole in zip(comps, wholes)]
@@ -420,13 +340,7 @@ def build(cfg: Config, generate_only: bool = False) -> int:
 
 
 def _component_typed_io(comp, comp_dir: Path, backend: str):
-    # comp_dir is the unit dir (build/components/<name>/); its own
-    # build-<backend>/ subfolder holds that backend's extracted state.json,
-    # same as its "sim" binary. IO classification doesn't depend on backend
-    # (same declared interfaces, same --top-name either way), so any built
-    # backend's own state json works - callers pass whichever is relevant
-    # (the run's selected backend, or a canonical one for build()'s own
-    # bookkeeping).
+    # IO classification doesn't depend on the backend; any built one's state json works.
     state_json = comp_dir / f"build-{backend}" / f"{comp.name}.json"
     if not state_json.exists():
         raise RuntimeError(f"{state_json} not found - run 'cosim build' first")
@@ -437,22 +351,8 @@ def _component_typed_io(comp, comp_dir: Path, backend: str):
 
 def _gen_dtb(cfg: Config, tools: ResolvedToolchain, build_dir: Path, comp_names: list[str] | None,
              backend: str) -> Path:
-    """(Re)generates build/cosim.dts/.dtb fresh on every call - this is what a
-    'run' command actually boots from, so it must reflect the *current*
-    component declarations (including each bus's compat/path/interrupts dts
-    mapping), not whatever `cosim build` last happened to write. Each coupled
-    component's own overlay fragment is (re)written to its own unit dir
-    (build/components/<name>/overlay.dts - shared across backends, since the
-    overlay only depends on bus/interrupt/gpio classification, not on which
-    backend built the component); build/cosim.dts is just a thin `/include/`
-    of the base platform dts plus exactly those fragments. `comp_names=None`
-    compiles design.dts as-is, no remote-port overlay at all - no RTL
-    coupling, no -machine-path needed. A non-empty list overlays *only* those
-    components: 'qemu --component X' must not reuse the all-components
-    overlay, or QEMU waits forever on sockets for every other coupled
-    component that was never spawned. `backend` selects which built variant's
-    own state json this run classifies IO from - the one `cosim run --backend`
-    picked (classification itself doesn't vary by backend)."""
+    """Writes build/cosim.dts and returns its compiled dtb: design.dts plus the overlays of
+    `comp_names` (none if None), with IO classified from `backend`'s state json."""
     if not cfg.design.dts:
         raise RuntimeError("this needs design.dts (a base platform device tree) to build the DTB from.")
     cosim_dts = build_dir / "cosim.dts"
@@ -483,17 +383,7 @@ def _gen_dtb(cfg: Config, tools: ResolvedToolchain, build_dir: Path, comp_names:
 
 
 def _run_coupled(cfg: Config, build_dir: Path, dtb: Path, comp_names: list[str], backend: str) -> int:
-    # One sim process per component, each its own remote-port chardev/socket
-    # under one shared machine-path, matching the RP_<name>/chrdev-id scheme
-    # dts_overlay.gen_component_dts declared for it in `dtb`. Each is started
-    # via that unit's own `make run-coupled` (mk/component.mk) rather than
-    # exec'ing build/sim directly - SOCK and SYNC_QUANTUM are always passed
-    # (SYNC_QUANTUM resolved from cosim.json here, not left to the unit's own
-    # Makefile default, so a component's own override or the top-level
-    # default always takes effect without needing a rebuild); MAX_CYCLES is
-    # whatever the unit's own Makefile has (seeded from its cosim.json
-    # override, or the top-level default, at scaffold time - see
-    # _MAKEFILE_SCAFFOLD - and hand-editable after).
+    # One sim per component, each on its own remote-port socket under one machine path.
     comps_by_name = {c.name: c for c in cfg.components}
     machine_path = Path(tempfile.mkdtemp(prefix="qemu-cosim."))
     procs = []
@@ -502,30 +392,14 @@ def _run_coupled(cfg: Config, build_dir: Path, dtb: Path, comp_names: list[str],
         for name in comp_names:
             unit = _unit_spec(cfg, comps_by_name[name], False, build_dir)
             sync_quantums.append(unit["sync_quantum"])
-            # Matches RemotePort's own rp_autocreate_chardev() naming
-            # (hw/core/remote-port.c): "qemu-rport-<node-name>", where
-            # <node-name> is this component's own <name> node -
-            # confirmed against QEMU's own "waiting for connection on ..."
-            # diagnostic (no leading "_" - that would only apply if the node
-            # sat under a path prefix, which it doesn't here, it's a direct
-            # child of the root).
+            # QEMU's rp_autocreate_chardev() naming.
             sock = machine_path / f"qemu-rport-{name.lower()}"
             cmd = ["make", "-C", str(unit["dir"]), "run-coupled", f"SOCK={sock}", f"BACKEND={backend}"]
             print("+", " ".join(cmd))
-            # New session (own process group) so the `finally` below can kill
-            # make's whole recipe pipeline (the shell it spawns, and that
-            # shell's own `./sim ... | tee` children) - terminating just the
-            # make process itself wouldn't reach the sim binary underneath it.
+            # Own process group, so the cleanup below also kills the sim under make.
             procs.append(subprocess.Popen(cmd, start_new_session=True))
 
-        # Shells out to build/qemu's own `make run-qemu-coupled` (mk/qemu.mk),
-        # same as the plain-boot case above - ELFS/QEMU_ARGS come from that
-        # unit's own Makefile; DTB/MACHINE_PATH/LOG are per-invocation, always
-        # passed on the command line, same as SOCK/BACKEND above. QEMU's own
-        # -sync-quantum gets the minimum of the coupled components' own
-        # sync_quantum (same values just passed to their sim processes above,
-        # not a separate guess) - the RTL side's tightest sync requirement is
-        # the one QEMU must not sync less often than.
+        # QEMU syncs as often as the tightest component sync_quantum.
         _run(["make", "-C", str(build_dir / "qemu"), "run-qemu-coupled",
               f"DTB={dtb}", f"MACHINE_PATH={machine_path}", f"LOG={build_dir / 'run.log'}",
               f"SYNC_QUANTUM={min(sync_quantums)}"])
@@ -542,10 +416,7 @@ def _run_coupled(cfg: Config, build_dir: Path, dtb: Path, comp_names: list[str],
 
 
 def _resolve_sim_target(cfg: Config, build_dir: Path, component: str | None, backend: str) -> Path:
-    # No component name => the whole, un-extracted design - a pseudo-component
-    # under components/<TopName>/, always built by build() alongside any
-    # declared components. "rtl" mode defaults to it, not to guessing at one
-    # extracted piece.
+    # No component means the whole design.
     name = _design_top_name(cfg.design.input) if component is None else component
     if component is not None:
         valid = {c.name for c in cfg.components}
@@ -588,37 +459,19 @@ def run(cfg: Config, mode: str, components: list[str] | None = None, backend: st
         comp = cfg.soc_rtl if not is_component else next((c for c in cfg.components if c.name == comp_name), None)
         _resolve_sim_target(cfg, build_dir, comp_name, backend)  # raises if comp_name is unknown
         unit = _unit_spec(cfg, comp, not is_component, build_dir)
-        # Shells out to this unit's own `make run` (mk/component.mk) instead
-        # of exec'ing build-<backend>/sim directly - MAX_CYCLES/RUN_ARGS are
-        # whatever that unit's own Makefile has (seeded from its cosim.json
-        # max_cycles/extra_args at scaffold time, hand-editable after).
-        # BACKEND=<selected> picks which built backend's sim binary `make
-        # run` actually executes (default there is the first supported one,
-        # same as here). That recipe already tees to this unit's own
-        # build-<backend>/run.log, the same path whether it ran via `cosim
-        # run rtl` or by hand - so there's one canonical log per backend, not
-        # two.
         jobs = f"-j{cfg.jobs or os.cpu_count() or 1}"
         _run(["make", "-C", unit["dir"], jobs, "run", f"BACKEND={backend}"])
         return 0
 
     if mode == "qemu":
         if not components:
-            # Plain boot, no RTL coupling at all: design.dts as-is, no
-            # remote-port overlay, no -machine-path, no sim peers to wait on.
-            # Shells out to build/qemu's own `make run-qemu` (mk/qemu.mk)
-            # instead of exec'ing qemu directly - ELFS/QEMU_ARGS are whatever
-            # that unit's own Makefile has (seeded from cosim.json's
-            # qemu.elfs/qemu.extra_args at scaffold time, hand-editable
-            # after). That recipe already tees to build/run.log.
+            # Plain boot: design.dts as-is, no RTL coupling.
             dtb = _gen_dtb(cfg, tools, build_dir, None, backend)
             _run(["make", "-C", str(build_dir / "qemu"), "run-qemu",
                   f"DTB={dtb}", f"LOG={build_dir / 'run.log'}"])
             return 0
 
-        # Just these components: their own overlay/dtb, their own sim
-        # processes - not the all-components overlay, which would leave QEMU
-        # waiting on sockets for every other coupled component never spawned.
+        # Only these components' overlays, or QEMU waits on sockets nobody serves.
         valid = {c.name for c in cfg.components}
         unknown = [name for name in components if name not in valid]
         if unknown:
@@ -631,9 +484,7 @@ def run(cfg: Config, mode: str, components: list[str] | None = None, backend: st
         dtb = _gen_dtb(cfg, tools, build_dir, components, backend)
         return _run_coupled(cfg, build_dir, dtb, components, backend)
 
-    # mode == "cosim": one sim process per component that needs QEMU coupling
-    # (see build()'s cosim_components.json for which ones), all sharing one
-    # QEMU instance. Any COMPONENT args are ignored - it's always all of them.
+    # mode == "cosim": every component that needs QEMU; COMPONENT args are ignored.
     manifest_path = build_dir / "cosim_components.json"
     if not manifest_path.exists():
         raise RuntimeError(
