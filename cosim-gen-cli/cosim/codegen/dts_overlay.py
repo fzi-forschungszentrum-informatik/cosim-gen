@@ -17,10 +17,10 @@ from .jinja import env
 from .typedio import *
 
 
-def parseDts(path: str) -> Devicetree:
+def parseDts(path: str, dtc: str = "dtc") -> Devicetree:
     r = subprocess.run(
         [
-            "dtc",
+            dtc,
             "-I",
             "dts",
             path,
@@ -28,6 +28,7 @@ def parseDts(path: str) -> Devicetree:
             "dts",
         ],
         capture_output=True,
+        check=False,  # the returncode check below owns the error message
     )
     if r.returncode != 0:
         raise RuntimeError(
@@ -258,11 +259,11 @@ def _build_overlay_ctx(
     return ctx
 
 
-def open_base_tree(inputDtsPath: str) -> tuple[Devicetree, str]:
+def open_base_tree(inputDtsPath: str, dtc: str = "dtc") -> tuple[Devicetree, str]:
     """Parse the base platform dts once and locate its system bus node - the
     (tree, sysBus) pair is reused across every component's own overlay
     fragment in one `cosim run` (see gen_component_dts)."""
-    tree = parseDts(inputDtsPath)
+    tree = parseDts(inputDtsPath, dtc)
     sysBus = (
         getSingleCompat(tree, r"freechips,rocketchip-unknown-soc|simple-bus").get_path()
         + "/"

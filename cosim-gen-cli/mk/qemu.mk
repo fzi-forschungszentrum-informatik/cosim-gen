@@ -8,7 +8,9 @@
 # build/qemu/Makefile is first scaffolded.
 #===-------------------------------------------------------------------------===
 
+# Fallbacks when common.mk has no resolved tool.
 DTC             ?= dtc
+QEMU            ?= qemu-system-riscv64
 # Directory holding the base platform dts (cosim.json's design.dts) that the
 # generated cosim overlay /include/s - dtc needs it (and anything *it*
 # /include/s) on the search path even when there's no qemu-boards/ dir.

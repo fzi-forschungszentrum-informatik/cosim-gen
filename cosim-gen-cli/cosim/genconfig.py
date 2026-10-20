@@ -27,7 +27,9 @@ from pathlib import Path
 import yaml
 
 from .codegen.dts_overlay import parseDts
+from .config import ToolchainConfig
 from .interfaces import bus_kinds
+from .toolchain import resolve
 
 # Diplomacy interface tags this script knows how to classify - not to be
 # confused with cosim.json's own "interfaces" list (config.Component), which
@@ -106,7 +108,9 @@ def _bus_address(config: dict) -> int | None:
 
 
 def _dts_address_index(dts_path: Path) -> dict[int, object]:
-    tree = parseDts(str(dts_path))
+    # No cosim.json here: resolve dtc like `cosim doctor` (DTC env var, then $PATH).
+    dtc = resolve(ToolchainConfig())["dtc"] or "dtc"
+    tree = parseDts(str(dts_path), dtc)
     index = {}
     for node in tree.all_nodes():
         reg = list(node.get_reg() or [])
