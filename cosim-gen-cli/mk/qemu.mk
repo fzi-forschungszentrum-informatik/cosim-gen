@@ -23,9 +23,8 @@ endif
 %.dtb: %.dts
 	$(DTC) $(if $(BOARD_DIR),-i $(BOARD_DIR)) $(if $(DTS_INCLUDE_DIR),-i $(DTS_INCLUDE_DIR)) $< -o $@
 
-QEMU_ARGS       ?= -serial mon:stdio -display none
-                            # extra qemu flags, appended after the ELF loaders -
-                            # an escape hatch for anything project.py doesn't have a dedicated knob for
+# Extra qemu flags, appended after the ELF loaders.
+QEMU_ARGS       ?= -serial mon:stdio -display none $(QEMU_EXTRA_ARGS)
 ELFS            ?=          # ELF files passed to QEMU via -device loader, in order (e.g. bootrom, test image)
 SYNC_QUANTUM    ?= 1000    # max ns between QEMU<->remote-port syncs (run-qemu-coupled only) -
                             # matches Config.sync_quantum's own default; project.py's _run_coupled

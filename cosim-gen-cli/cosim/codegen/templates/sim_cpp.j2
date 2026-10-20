@@ -50,10 +50,7 @@ typedef A{{ ctx.model.name }} {{ ctx.top_module }}_Wrapper;
 
 struct Top;
 {% if ctx.model.typedIO.other %}
-// Weak no-op default: define your own `void cosim_user_wire(Top&)` in an
-// EXTRA_SRCS file (see this component's Makefile) to bind the signals listed
-// below to your own SystemC peripheral model - the strong definition wins at
-// link time, so it's fine to add none at all.
+// Weak no-op default; define cosim_user_wire() to bind the signals listed below.
 void cosim_user_wire(Top &top) __attribute__((weak));
 void cosim_user_wire(Top &top) { /* no user model connected */ }
 {% endif %}

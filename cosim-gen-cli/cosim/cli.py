@@ -18,10 +18,13 @@ _INIT_TEMPLATE = """{{
   "qemu": {{
     "elfs": ["bootrom.elf", "simram.elf"]
   }},
+  "sync_quantum": 1000,
+  "max_cycles": 0,
+  "trace": false,
   "components": [
     {{
-      "type": "MyPeripheral",
-      "path": "topDesign/topMod/myPeripheral",
+      "type": "TLUART",
+      "path": "topDesign/topMod/uart_0",
       "compat": "sifive,uart0",
       "interfaces": [
         {{ "kind": "clock", "name": "clock", "freq_mhz": 150 }},
@@ -45,7 +48,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     config_path.write_text(_INIT_TEMPLATE.format(backend=args.backend))
     print(f"Created {config_path}")
     print(
-        "Edit it to point at your design, dts, mapping, and components, then run 'cosim build'."
+        "Edit it to point at your design, dts and components, then run 'cosim doctor' and 'cosim build'."
     )
     return 0
 
@@ -236,10 +239,8 @@ def build_parser() -> argparse.ArgumentParser:
     clean.add_argument(
         "--all",
         action="store_true",
-        help="Also remove each component's scaffolded Makefile, sim.cpp, and any hand-added "
-        "sources (e.g. periph.cpp) - by default those survive `cosim clean` since they "
-        "may be hand-edited; only the machine-owned config.mk and nested build/ artifacts "
-        "are removed.",
+        help="Remove the whole build directory, including each unit's sim.cpp and any "
+        "hand-added sources, which `cosim clean` otherwise keeps.",
     )
     clean.set_defaults(func=cmd_clean)
 

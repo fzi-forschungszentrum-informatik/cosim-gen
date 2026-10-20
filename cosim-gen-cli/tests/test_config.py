@@ -375,6 +375,9 @@ def test_top_level_defaults(tmp_path):
         "sync_quantum": 5000,
         "max_cycles": 100,
         "extra_args": ["+foo=1"],
+        "trace": True,
+        "cxxflags": ["-DFOO"],
+        "verilator_args": ["--threads", "2"],
     }
     p = tmp_path / "cosim.json"
     p.write_text(json.dumps(cosim_json))
@@ -383,6 +386,9 @@ def test_top_level_defaults(tmp_path):
     assert cfg.sync_quantum == 5000
     assert cfg.max_cycles == 100
     assert cfg.extra_args == ["+foo=1"]
+    assert cfg.trace is True
+    assert cfg.cxxflags == ["-DFOO"]
+    assert cfg.verilator_args == ["--threads", "2"]
 
 
 def test_top_level_defaults_fall_back(tmp_path):
@@ -394,6 +400,26 @@ def test_top_level_defaults_fall_back(tmp_path):
     assert cfg.sync_quantum == 1000
     assert cfg.max_cycles == 0
     assert cfg.extra_args == []
+    assert cfg.trace is False
+    assert cfg.ldlibs == []
+
+
+def test_unit_options_inherit_unless_set():
+    c = load(component(CLOCK, coverage=True, arcilator_args=["--x"], user_sim_cpp=True))
+    assert c.coverage is True
+    assert c.arcilator_args == ["--x"]
+    assert c.trace is None
+    assert c.user_sim_cpp is True
+
+
+@pytest.mark.parametrize("key, value", [
+    ("trace", "yes"), ("user_sim_cpp", 1), ("cxxflags", "-O2"),
+    ("sync_quantum", "x"), ("max_cycles", 1.5),
+])
+def test_unit_option_type_rejected(key, value):
+    with pytest.raises(TypeError) as exc_info:
+        load(component(CLOCK, **{key: value}))
+    assert key in str(exc_info.value)
 
 
 # --- toolchain ---------------------------------------------------------------

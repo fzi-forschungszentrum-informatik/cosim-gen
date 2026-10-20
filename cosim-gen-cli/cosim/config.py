@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import copy
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import ClassVar
 
@@ -28,6 +29,71 @@ def _section(d: dict, key: str) -> dict:
     if not isinstance(value, dict):
         raise TypeError(f"cosim.json: {key} must be an object, got {value!r}")
     return value
+
+
+def _int(d: dict, key: str, where: str) -> int:
+    value = d[key]
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise TypeError(f"cosim.json: {where}: {key} must be an integer, got {value!r}")
+    return value
+
+
+def _bool(d: dict, key: str, where: str) -> bool:
+    value = d[key]
+    if not isinstance(value, bool):
+        raise TypeError(f"cosim.json: {where}: {key} must be true or false, got {value!r}")
+    return value
+
+
+def _str_list(d: dict, key: str, where: str) -> list[str]:
+    value = d[key]
+    if not isinstance(value, list):
+        raise TypeError(f"cosim.json: {where}: {key} must be a list, got {value!r}")
+    return [str(v) for v in value]
+
+
+@dataclass(kw_only=True)
+class UnitSettings:
+    """Settings of a built unit, set at the top level and overridable per
+    component/soc_rtl. None means unset."""
+
+    # Cycles between a sim's remote-port syncs.
+    sync_quantum: int | None = None
+    # Clock cycles before a sim stops, 0 = unbounded.
+    max_cycles: int | None = None
+    extra_args: list[str] | None = None
+    trace: bool | None = None
+    sysc_trace: bool | None = None
+    coverage: bool | None = None
+    cxxflags: list[str] | None = None
+    ldlibs: list[str] | None = None
+    verilator_args: list[str] | None = None
+    arcilator_args: list[str] | None = None
+
+    DEFAULTS: ClassVar[dict] = {
+        "sync_quantum": 1000, "max_cycles": 0, "extra_args": [],
+        "trace": False, "sysc_trace": False, "coverage": False,
+        "cxxflags": [], "ldlibs": [], "verilator_args": [], "arcilator_args": [],
+    }
+
+    @staticmethod
+    def _load_settings(d: dict, where: str) -> dict:
+        parse = {int: _int, bool: _bool, list: _str_list}
+        return {
+            f.name: parse[type(UnitSettings.DEFAULTS[f.name])](d, f.name, where)
+            for f in fields(UnitSettings) if f.name in d
+        }
+
+    def settings_for(self, comp: UnitSettings | None) -> dict:
+        """Every setting, from `comp` where it sets one, else from self."""
+        return {
+            f.name: getattr(self, f.name) if comp is None or getattr(comp, f.name) is None
+            else getattr(comp, f.name)
+            for f in fields(UnitSettings)
+        }
+
+
+UNIT_SETTINGS = tuple(f.name for f in fields(UnitSettings))
 
 
 @dataclass
@@ -111,8 +177,8 @@ class QemuConfig:
         )
 
 
-@dataclass
-class Component:
+@dataclass(kw_only=True)
+class Component(UnitSettings):
     # Every port this component exposes, one entry per interface, each tagged
     # with its own 'kind' - see cosim/interfaces/. Always non-empty: a clock
     # is required (it's the anchor the instance prefix is derived from).
@@ -124,9 +190,8 @@ class Component:
     compat: str | None = None
     dts_path: str | None = None
     extra_files: list[Path] = field(default_factory=list)
-    sync_quantum: int | None = None
-    max_cycles: int | None = None
-    extra_args: list[str] | None = None
+    # The unit's sim.cpp is user-maintained and never generated.
+    user_sim_cpp: bool = False
 
     @property
     def top_name(self) -> str:
@@ -228,9 +293,8 @@ class Component:
             compat=d.get("compat"),
             dts_path=d.get("dts_path"),
             extra_files=[_resolve(root, f) for f in d.get("extra_files", [])],
-            sync_quantum=d.get("sync_quantum"),
-            max_cycles=d.get("max_cycles"),
-            extra_args=[str(a) for a in d["extra_args"]] if "extra_args" in d else None,
+            user_sim_cpp=_bool(d, "user_sim_cpp", what) if "user_sim_cpp" in d else False,
+            **UnitSettings._load_settings(d, what),
         )
 
 
@@ -259,29 +323,14 @@ class ToolchainConfig:
         return ToolchainConfig(**{k: d[k] for k in known if k in d})
 
 
-@dataclass
-class Config:
+@dataclass(kw_only=True)
+class Config(UnitSettings):
     root: Path
     design: DesignConfig
     qemu: QemuConfig
     # make -jN for every generated Makefile invocation (design lowering,
     # component extraction, systemctlm, link, dtb). None => os.cpu_count().
     jobs: str | None = None
-    # Cycles between each sim binary's remote-port sync point with QEMU -
-    # too low and QEMU spends most of its time context-switching to sync
-    # rather than running; too high and device timing gets coarse. A
-    # component's own sync_quantum overrides this for that component.
-    sync_quantum: int = 1000
-    # Stop each RTL model after this many clock cycles instead of running
-    # forever; 0 = unbounded. A component's own max_cycles overrides this
-    # for that component; `cosim run --cycles N` overrides both.
-    max_cycles: int = 0
-    # Extra argv strings appended to every spawned sim binary invocation,
-    # after the positional sync_quantum/max_cycles slots - read by
-    # verilator's plusargs scanning regardless of position, silently
-    # ignored by arcilator. A component's own extra_args overrides this
-    # for that component.
-    extra_args: list = field(default_factory=list)
     # The whole, un-extracted design's own clock/reset/sync_quantum/
     # max_cycles/extra_args/extra_files declaration - None if not given (the
     # whole-design build then falls back to name-heuristic clock/reset
@@ -296,8 +345,7 @@ class Config:
     path: Path | None = None
 
     TOP_LEVEL_KEYS: ClassVar[tuple[str, ...]] = (
-        "design", "qemu", "jobs", "sync_quantum", "max_cycles",
-        "extra_args", "soc_rtl", "components", "toolchain",
+        "design", "qemu", "jobs", "soc_rtl", "components", "toolchain", *UNIT_SETTINGS,
     )
 
     @staticmethod
@@ -327,13 +375,11 @@ class Config:
             design=DesignConfig.load(root, _section(d, "design")),
             qemu=QemuConfig.load(root, _section(d, "qemu")),
             jobs=d.get("jobs"),
-            sync_quantum=d.get("sync_quantum", 1000),
-            max_cycles=d.get("max_cycles", 0),
-            extra_args=[str(a) for a in d.get("extra_args", [])],
             soc_rtl=Component.load(root, _section(d, "soc_rtl"), require_type_path=False) if "soc_rtl" in d else None,
             components=[Component.load(root, c) for c in d.get("components", [])],
             toolchain=ToolchainConfig.load(_section(d, "toolchain")),
             path=path,
+            **(copy.deepcopy(UnitSettings.DEFAULTS) | UnitSettings._load_settings(d, "top level")),
         )
 
         seen: dict[str, int] = {}

@@ -155,11 +155,10 @@ COMPONENT_LIB_VERILATOR     := $(O_VERILATOR)/verilator/libV$(TOP_NAME).a
 COMPONENT_RUNTIME_VERILATOR := $(O_VERILATOR)/verilator/libverilated.a
 COMPONENT_HDR_VERILATOR     := $(O_VERILATOR)/verilator/V$(TOP_NAME).h
 VERI_INCLUDES := -I $(O_VERILATOR)/verilator -isystem $(VERILATOR_ROOT)/include -isystem $(VERILATOR_ROOT)/include/vltstd
-# $(strip ...): these vars are user-editable Makefile hooks, typically
-# written as "TRACE ?= 1      # comment" for column alignment - the trailing
-# spaces before the comment are part of the assigned *value* (comments don't
-# get stripped until after expansion), so an unstripped ifeq's literal string
-# compare against "1" would silently never match.
+VERILATOR_ARGS := -DPRINTF_COND=1 -DASSERT_VERBOSE_COND=1 -DSTOP_COND=1 -Wno-fatal -O3 \
+                  --x-assign fast --x-initial fast --noassert \
+                  -Wno-WIDTHEXPAND -Wno-UNSIGNED -Wno-WIDTHTRUNC -Wno-TIMESCALEMOD \
+                  --expand-limit 1024 $(VERILATOR_EXTRA_ARGS)
 ifeq ($(strip $(TRACE)),1)
 VERILATOR_ARGS += --trace-vcd
 endif
