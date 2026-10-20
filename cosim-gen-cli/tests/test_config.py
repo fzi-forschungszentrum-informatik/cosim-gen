@@ -329,10 +329,9 @@ def test_design_input_empty_string_rejected():
 
 # --- design.supported_backends ---------------------------------------------------
 
-def test_supported_backends_required():
-    with pytest.raises(ValueError) as exc_info:
-        DesignConfig.load(None, {"input": "d.fir"})
-    assert "design.supported_backends is required" in str(exc_info.value)
+def test_supported_backends_default_to_verilator(tmp_path):
+    d = DesignConfig.load(tmp_path, {"input": "d.fir"})
+    assert d.supported_backends == ["verilator"]
 
 
 def test_supported_backends_must_be_non_empty_list():

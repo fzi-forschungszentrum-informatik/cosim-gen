@@ -94,19 +94,17 @@ QEMU coupling to actually exercise them.
 }
 ```
 
-Only `design.input` and `design.supported_backends` are required; everything else is
+Only `design.input` is required; everything else is
 optional and defaults to "whole design, no QEMU coupling."
 
 ### `design`
 
 - **`input`** (required) — `.fir`, or `.hw.mlir`/`.mlir` to skip the firtool lowering
   step entirely (the file is used as-is).
-- **`supported_backends`** (required) — a non-empty list of `"arcilator"`/`"verilator"`,
-  the backend(s) *this design* actually lowers on. `cosim build` builds a unit for every
-  one listed; `cosim run --backend` picks which built variant to execute (default: the
-  first one listed). No default value on purpose — some designs only lower on one backend
-  (e.g. async-reset registers arcilator can't lower), so this isn't safe to guess at. See
-  [Backend vs. run mode](#backend-vs-run-mode).
+- **`supported_backends`** — a non-empty list of `"arcilator"`/`"verilator"`, default
+  `["verilator"]`: the backend(s) *this design* lowers on. `cosim build` builds a unit for
+  every one listed; `cosim run --backend` picks which built variant to execute (default: the
+  first one listed). See [Backend vs. run mode](#backend-vs-run-mode).
 - **`dts`** — base platform device tree. Only needed to generate the QEMU overlay
   (`qemu`/`cosim` run modes); a design with no bus/interrupt IO can be built and run in
   `rtl` mode without it. The QEMU-side dts mapping lives on the owning component's own
@@ -330,7 +328,7 @@ resolution order below.
 ## CLI reference
 
 - **`cosim init [dir] [--backend arcilator|verilator] [-f]`** — scaffold a starter
-  `cosim.json` in `dir` (default: cwd).
+  `cosim.json` in `dir` (default: cwd) for one backend (default: verilator).
 - **`cosim gen-config <diplomacy.json> [-o cosim.json] [--dts board.dts]`** — derive a
   structured `components` list from a design's `*.diplomacy.json` config (one entry per
   labeled module, classifying its `interfaces` - clock/reset/bus/interrupt - from the

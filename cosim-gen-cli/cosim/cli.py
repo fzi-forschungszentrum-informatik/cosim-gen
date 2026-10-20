@@ -140,7 +140,7 @@ def build_parser() -> argparse.ArgumentParser:
         "dir", nargs="?", default=".", help="Directory to scaffold into (default: cwd)"
     )
     init.add_argument(
-        "--backend", choices=["arcilator", "verilator"], default="arcilator"
+        "--backend", choices=["arcilator", "verilator"], default="verilator"
     )
     init.add_argument(
         "-f", "--force", action="store_true", help="Overwrite an existing cosim.json"

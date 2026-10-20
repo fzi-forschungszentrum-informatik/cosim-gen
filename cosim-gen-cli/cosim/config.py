@@ -112,13 +112,7 @@ class DesignConfig:
             raise ValueError("cosim.json: design.input is required")
         if not d["input"]:
             raise ValueError("cosim.json: design.input must be a non-empty path")
-        if "supported_backends" not in d:
-            raise ValueError(
-                "cosim.json: design.supported_backends is required - a list of the "
-                "backend(s) this design lowers on and `cosim build` builds, e.g. "
-                "[\"arcilator\"] or [\"verilator\"] - see cosim-gen-cli/README.md"
-            )
-        backends = d["supported_backends"]
+        backends = d.get("supported_backends", ["verilator"])
         if not isinstance(backends, list):
             raise TypeError(
                 f"cosim.json: design.supported_backends must be a list, got {backends!r}"
