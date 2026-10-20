@@ -9,7 +9,6 @@ import re
 
 from .typedio import *
 
-
 C_KEYWORDS = [
     "alignas",
     "alignof",

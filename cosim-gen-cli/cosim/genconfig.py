@@ -54,7 +54,7 @@ class _Port:
         self.config = config.get("config", {})
         self.children = [_Port(n, c) for n, c in config.get("children", {}).items()]
 
-    def get_leafs(self, with_config: bool = True) -> list["_Port"]:
+    def get_leafs(self, with_config: bool = True) -> list[_Port]:
         if (with_config and self.config) or not self.children:
             return [self]
         leafs = []

@@ -7,9 +7,9 @@ Backend-agnostic: the same sim.cpp drives an arcilator A<Model>.h wrapper or a
 verilator V<Top>.h, selected by the USE_ARCILATOR/USE_VERILATOR define."""
 from dataclasses import dataclass, field
 
-from .typedio import *
 from .format import *
 from .jinja import env
+from .typedio import *
 
 
 @dataclass

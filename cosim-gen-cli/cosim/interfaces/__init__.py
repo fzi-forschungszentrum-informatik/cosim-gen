@@ -205,14 +205,14 @@ class Interface:
 # Each import below both registers its kind(s) into INTERFACE_KINDS (via
 # Interface.__init_subclass__) and re-exports the class, so `from ..interfaces
 # import *` (config.py, codegen/typedio.py) keeps seeing every concrete kind
-# without listing them here by hand.
-from .clock import ClockInterface  # noqa: E402 - after Interface, which they subclass
-from .reset import ResetInterface  # noqa: E402
-from .wire import _WireInterface  # noqa: E402
-from .interrupt import IrqInterface  # noqa: E402
-from .gpio import GpioInterface  # noqa: E402
+# without listing them here by hand. `X as X` marks them as re-exports for ruff.
 from .bus import BusInterface
-from .tilelink import TileLinkBus  # noqa: E402,F401 - imported for its registration
+from .clock import ClockInterface as ClockInterface
+from .gpio import GpioInterface as GpioInterface
+from .interrupt import IrqInterface as IrqInterface
+from .reset import ResetInterface as ResetInterface
+from .tilelink import TileLinkBus as TileLinkBus
+from .wire import _WireInterface as _WireInterface
 
 
 def known_kinds() -> str:

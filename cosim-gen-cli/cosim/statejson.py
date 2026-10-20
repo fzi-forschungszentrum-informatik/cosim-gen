@@ -13,13 +13,6 @@ from dataclasses import dataclass
 from enum import Enum
 
 
-# needed to support python3 older than 3.9
-def removeprefix(text, prefix):
-    if text.startswith(prefix):
-        return text[len(prefix) :]
-    return text
-
-
 class StateType(Enum):
     INPUT = "input"
     OUTPUT = "output"
@@ -86,7 +79,7 @@ def group_state_by_hierarchy(states: list[StateInfo]) -> tuple[list[StateInfo], 
             if not state.name.startswith(prefix + "/"):
                 left.append(state)
                 continue
-            state.name = removeprefix(state.name, prefix + "/")
+            state.name = state.name.removeprefix(prefix + "/")
             substates.append(state)
         remainder = left
         hierarchy_states, hierarchy_children = group_state_by_hierarchy(substates)

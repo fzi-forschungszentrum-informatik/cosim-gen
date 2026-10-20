@@ -5,6 +5,7 @@ plus one full Config.load() round-trip through a real file."""
 import json
 
 import pytest
+
 from cosim.config import Component, Config, DesignConfig, ToolchainConfig
 from cosim.toolchain import _TOOL_SPECS
 

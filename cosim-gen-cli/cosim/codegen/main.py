@@ -2,10 +2,12 @@
 import argparse
 import json
 from pathlib import Path
-from .typedio import *
+
 from .arc_model import gen_cpp, gen_header
 from .arc_wrapper import gen_wrapper
 from .sim_main import gen_main
+from .typedio import *
+
 
 def processJson(state_json, io_spec=None) -> List[ModelInfo]:
   """io_spec is the cosim.json Component declaration (its 'interfaces' list)

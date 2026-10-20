@@ -6,13 +6,12 @@ patterns and feeding the guesses through the same resolve path.
 Backend-agnostic: both the arcilator and verilator paths render sim.cpp from
 the TypedIO built here. `from .typedio import *` also re-exports statejson's
 and interfaces' names, which the rest of codegen/ relies on."""
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import *
 
-from ..statejson import *      # noqa: F401,F403 - re-exported for `from .typedio import *`
-from ..interfaces import *     # noqa: F401,F403
+from ..interfaces import *
 from ..interfaces.bus import BusInterface
-from ..interfaces.tilelink import TileLinkBus
+from ..statejson import *
 
 
 @dataclass

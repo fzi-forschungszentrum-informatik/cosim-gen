@@ -12,6 +12,7 @@ from re import Pattern
 
 from pydevicetree import Devicetree, ast
 
+from ..config import Component
 from .jinja import env
 from .typedio import *
 
@@ -63,7 +64,7 @@ def getNodePhandles(tree: Devicetree):
     return r
 
 
-def resolve_component_node(tree: Devicetree, comp: "Component"):
+def resolve_component_node(tree: Devicetree, comp: Component):
     """The single dts node this component binds to, via comp.dts_path
     (an explicit node path) or comp.compat (a "compatible" match) - or None
     if it declares neither, meaning it isn't wired to anything in the base
@@ -270,7 +271,7 @@ def open_base_tree(inputDtsPath: str) -> tuple[Devicetree, str]:
 
 
 def gen_component_dts(
-    name: str, comp: "Component", typedIO: TypedIO, tree: Devicetree, sysBus: str
+    name: str, comp: Component, typedIO: TypedIO, tree: Devicetree, sysBus: str
 ) -> str:
     """One component's own standalone overlay fragment: its own `&{/} {...}`
     block (RP node + wires) plus any per-path `&{path} {...}` blocks for its
