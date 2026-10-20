@@ -7,7 +7,7 @@ import json
 import pytest
 
 from cosim.codegen.typedio import build_typedIO
-from cosim.config import Component, Config, DesignConfig, ToolchainConfig
+from cosim.config import Component, Config, DesignConfig, QemuConfig, ToolchainConfig
 from cosim.statejson import StateInfo, StateType
 from cosim.toolchain import _TOOL_SPECS
 
@@ -273,6 +273,12 @@ def test_io_regex_is_ordered_by_kind_not_declaration():
     )
 
 
+def test_needs_qemu_only_with_bus_interrupt_or_gpio():
+    assert load(component(CLOCK, RESET, BUS)).needs_qemu
+    assert load(component(CLOCK, RESET, GPIO)).needs_qemu
+    assert not load(component(CLOCK, RESET, UNCONNECTED)).needs_qemu
+
+
 def _ports(*names):
     return [StateInfo(n, 0, 1, StateType.INPUT, None, None) for n in names]
 
@@ -365,6 +371,11 @@ def test_supported_backends_rejected(backends):
 def test_supported_backends_valid(tmp_path):
     d = DesignConfig.load(tmp_path, {"input": "d.fir", "supported_backends": ["arcilator", "verilator"]})
     assert d.supported_backends == ["arcilator", "verilator"]
+
+
+def test_qemu_sync_quantum_must_be_int(tmp_path):
+    with pytest.raises(TypeError, match="qemu: sync_quantum must be an integer"):
+        QemuConfig.load(tmp_path, {"sync_quantum": "x"})
 
 
 def test_extra_vsrcs_must_be_a_list(tmp_path):

@@ -159,7 +159,7 @@ class QemuConfig:
         return QemuConfig(
             elfs=[_resolve(root, f) for f in d.get("elfs", [])],
             extra_args=[str(a) for a in d.get("extra_args", [])],
-            sync_quantum=d.get("sync_quantum"),
+            sync_quantum=_int(d, "sync_quantum", "qemu") if "sync_quantum" in d else None,
         )
 
 
@@ -181,6 +181,10 @@ class Component(UnitSettings):
     @property
     def top_name(self) -> str:
         return f"{self.name}_TOP"
+
+    @property
+    def needs_qemu(self) -> bool:
+        return any(i.NEEDS_QEMU for i in self.interfaces)
 
     @property
     def ordered_interfaces(self) -> list[Interface]:
