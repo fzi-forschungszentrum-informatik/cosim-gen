@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import ClassVar
 
 from .interfaces import (
     ClockInterface,
@@ -20,6 +21,13 @@ def _resolve(root: Path, value: str | None) -> Path | None:
         return None
     p = Path(value).expanduser()
     return p if p.is_absolute() else (root / p).resolve()
+
+
+def _section(d: dict, key: str) -> dict:
+    value = d.get(key, {})
+    if not isinstance(value, dict):
+        raise TypeError(f"cosim.json: {key} must be an object, got {value!r}")
+    return value
 
 
 @dataclass
@@ -52,9 +60,13 @@ class DesignConfig:
                 "[\"arcilator\"] or [\"verilator\"] - see cosim-gen-cli/README.md"
             )
         backends = d["supported_backends"]
-        if not isinstance(backends, list) or not backends:
+        if not isinstance(backends, list):
+            raise TypeError(
+                f"cosim.json: design.supported_backends must be a list, got {backends!r}"
+            )
+        if not backends:
             raise ValueError(
-                f"cosim.json: design.supported_backends must be a non-empty list, got {backends!r}"
+                "cosim.json: design.supported_backends must be a non-empty list"
             )
         bad = [b for b in backends if b not in ("arcilator", "verilator")]
         if bad:
@@ -283,24 +295,44 @@ class Config:
     # may not be named "cosim.json" (a -C override).
     path: Path | None = None
 
+    TOP_LEVEL_KEYS: ClassVar[tuple[str, ...]] = (
+        "design", "qemu", "jobs", "sync_quantum", "max_cycles",
+        "extra_args", "soc_rtl", "components", "toolchain",
+    )
+
     @staticmethod
     def load(path: Path) -> Config:
         path = Path(path).expanduser().resolve()
         with open(path) as f:
             d = json.load(f)
+        if not isinstance(d, dict):
+            raise TypeError(
+                f"cosim.json: top level must be a JSON object, "
+                f"got {type(d).__name__}"
+            )
+        unknown = set(d) - set(Config.TOP_LEVEL_KEYS)
+        if unknown:
+            raise ValueError(
+                f"cosim.json: unknown top-level key(s) {sorted(unknown)} - known: "
+                f"{', '.join(Config.TOP_LEVEL_KEYS)}"
+            )
+        if "components" in d and not isinstance(d["components"], list):
+            raise TypeError(
+                f"cosim.json: components must be a list, got {d['components']!r}"
+            )
 
         root = path.parent
         cfg = Config(
             root=root,
-            design=DesignConfig.load(root, d.get("design", {})),
-            qemu=QemuConfig.load(root, d.get("qemu", {})),
+            design=DesignConfig.load(root, _section(d, "design")),
+            qemu=QemuConfig.load(root, _section(d, "qemu")),
             jobs=d.get("jobs"),
             sync_quantum=d.get("sync_quantum", 1000),
             max_cycles=d.get("max_cycles", 0),
             extra_args=[str(a) for a in d.get("extra_args", [])],
-            soc_rtl=Component.load(root, d["soc_rtl"], require_type_path=False) if "soc_rtl" in d else None,
+            soc_rtl=Component.load(root, _section(d, "soc_rtl"), require_type_path=False) if "soc_rtl" in d else None,
             components=[Component.load(root, c) for c in d.get("components", [])],
-            toolchain=ToolchainConfig.load(d.get("toolchain", {})),
+            toolchain=ToolchainConfig.load(_section(d, "toolchain")),
             path=path,
         )
 

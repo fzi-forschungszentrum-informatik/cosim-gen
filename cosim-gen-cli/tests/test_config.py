@@ -85,8 +85,7 @@ def test_missing_interfaces_key():
 
 def test_interfaces_not_a_list():
     # Wrong type entirely (not just a malformed value of the right type), so
-    # this is the one check that raises TypeError instead of ValueError -
-    # every other cosim.json validation error in config.py is a ValueError.
+    # this raises TypeError
     with pytest.raises(TypeError) as exc_info:
         load({**BASE, "interfaces": {"kind": "clock", "name": "clock"}})
     assert "must be a list" in str(exc_info.value)
@@ -157,7 +156,7 @@ def test_clock_with_prefix_rejected():
 
 
 def test_clock_freq_mhz_must_be_int():
-    msg = err(component({"kind": "clock", "name": "clock", "freq_mhz": "150"}))
+    msg = terr(component({"kind": "clock", "name": "clock", "freq_mhz": "150"}))
     assert "freq_mhz must be an integer" in msg
 
 
@@ -342,6 +341,13 @@ def test_supported_backends_must_be_non_empty_list():
     assert "must be a non-empty list" in str(exc_info.value)
 
 
+def test_supported_backends_not_a_list_rejected():
+    with pytest.raises(TypeError) as exc_info:
+        DesignConfig.load(None, {"input": "d.fir", "supported_backends": "arcilator"})
+    assert "must be a list" in str(exc_info.value)
+    assert "arcilator" in str(exc_info.value)
+
+
 def test_supported_backends_rejects_unknown_value():
     with pytest.raises(ValueError) as exc_info:
         DesignConfig.load(None, {"input": "d.fir", "supported_backends": ["arcilator", "questasim"]})
@@ -406,3 +412,58 @@ def test_toolchain_accepts_every_tool_spec_key():
     cfg = ToolchainConfig.load(d)
     for name in _TOOL_SPECS:
         assert getattr(cfg, name) == "/some/path"
+
+
+# --- top-level cosim.json shape validation ---------------------------------------
+
+def test_unknown_top_level_key_rejected(tmp_path):
+    # A typo like "component" (for "components") must fail loudly, not be
+    # silently ignored.
+    cosim_json = {
+        "design": {"input": "design.fir", "supported_backends": ["arcilator"]},
+        "component": [],
+    }
+    p = tmp_path / "cosim.json"
+    p.write_text(json.dumps(cosim_json))
+    with pytest.raises(ValueError) as exc_info:
+        Config.load(p)
+    assert "unknown top-level key(s)" in str(exc_info.value)
+    assert "'component'" in str(exc_info.value)
+
+
+def test_non_object_top_level_rejected(tmp_path):
+    p = tmp_path / "cosim.json"
+    p.write_text(json.dumps(["not", "an", "object"]))
+    with pytest.raises(TypeError) as exc_info:
+        Config.load(p)
+    assert "top level must be a JSON object" in str(exc_info.value)
+
+
+def test_non_dict_design_section_rejected(tmp_path):
+    p = tmp_path / "cosim.json"
+    p.write_text(json.dumps({"design": "oops"}))
+    with pytest.raises(TypeError) as exc_info:
+        Config.load(p)
+    assert "design must be an object" in str(exc_info.value)
+
+
+def test_components_not_a_list_rejected(tmp_path):
+    p = tmp_path / "cosim.json"
+    p.write_text(json.dumps({
+        "design": {"input": "d.fir", "supported_backends": ["arcilator"]},
+        "components": {"type": "X"},
+    }))
+    with pytest.raises(TypeError) as exc_info:
+        Config.load(p)
+    assert "components must be a list" in str(exc_info.value)
+
+
+def test_soc_rtl_not_an_object_rejected(tmp_path):
+    p = tmp_path / "cosim.json"
+    p.write_text(json.dumps({
+        "design": {"input": "d.fir", "supported_backends": ["arcilator"]},
+        "soc_rtl": [],
+    }))
+    with pytest.raises(TypeError) as exc_info:
+        Config.load(p)
+    assert "soc_rtl must be an object" in str(exc_info.value)

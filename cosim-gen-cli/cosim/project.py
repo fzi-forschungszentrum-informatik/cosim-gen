@@ -310,6 +310,18 @@ def _extra_files(cfg: Config) -> list[Path]:
     return files
 
 
+def _reject_basename_collisions(files: list[Path]) -> None:
+    """Fails on two different files sharing one basename; the same file twice is fine."""
+    staged: dict[str, Path] = {}
+    for f in files:
+        prior = staged.get(f.name)
+        if prior is not None and prior.resolve() != f.resolve():
+            raise RuntimeError(
+                f"cosim.json: extra_files {prior} and {f} share the basename {f.name!r}"
+            )
+        staged[f.name] = f
+
+
 def _missing_required_tools(cfg: Config, tools: ResolvedToolchain, lowered_input: bool) -> list[str]:
     """Every tool this project's `cosim build` will actually shell out to,
     given every backend in design.supported_backends and whether design.input
@@ -352,6 +364,7 @@ def build(cfg: Config, generate_only: bool = False) -> int:
 
     # firtool resolves a MemoryFileInlineAnnotation's bare relative filename
     # (e.g. "bootrom.mem") against its own cwd, which is build_dir when make runs.
+    _reject_basename_collisions(_extra_files(cfg))
     for f in _extra_files(cfg):
         shutil.copy2(f, build_dir / f.name)
 

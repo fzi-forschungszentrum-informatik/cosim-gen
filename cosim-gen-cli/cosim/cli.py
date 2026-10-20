@@ -263,6 +263,8 @@ def main() -> None:
     except (
         RuntimeError,
         ValueError,
+        TypeError,
+        AttributeError,
         FileNotFoundError,
         KeyError,
         subprocess.CalledProcessError,
