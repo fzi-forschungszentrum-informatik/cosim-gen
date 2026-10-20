@@ -115,6 +115,8 @@ class DesignConfig:
     annotations: Path | None = None
     # Backends `cosim build` builds; `cosim run` defaults to the first.
     supported_backends: list[str] = field(default_factory=list)
+    # Verilog sources passed to every verilator build.
+    extra_vsrcs: list[Path] = field(default_factory=list)
 
     @property
     def lowered(self) -> bool:
@@ -132,12 +134,15 @@ class DesignConfig:
                 "cosim.json: design.supported_backends must be a non-empty list of distinct "
                 f"'arcilator'/'verilator', got {backends!r}"
             )
+        if d.get("extra_vsrcs") and "arcilator" in backends:
+            raise ValueError("cosim.json: design.extra_vsrcs isn't supported with the arcilator backend")
         return DesignConfig(
             input=_resolve(root, d["input"]),
             dts=_resolve(root, d.get("dts")),
             seqmem=_resolve(root, d.get("seqmem")),
             annotations=_resolve(root, d.get("annotations")),
             supported_backends=list(backends),
+            extra_vsrcs=[_resolve(root, f) for f in _str_list(d, "extra_vsrcs", "design")] if "extra_vsrcs" in d else [],
         )
 
 

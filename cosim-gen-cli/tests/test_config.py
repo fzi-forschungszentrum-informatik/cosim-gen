@@ -367,6 +367,17 @@ def test_supported_backends_valid(tmp_path):
     assert d.supported_backends == ["arcilator", "verilator"]
 
 
+def test_extra_vsrcs_must_be_a_list(tmp_path):
+    with pytest.raises(TypeError, match="extra_vsrcs must be a list"):
+        DesignConfig.load(tmp_path, {"input": "d.fir", "extra_vsrcs": "ext.sv"})
+
+
+def test_extra_vsrcs_rejected_with_arcilator():
+    with pytest.raises(ValueError, match="extra_vsrcs isn't supported with the arcilator"):
+        DesignConfig.load(None, {"input": "d.fir", "supported_backends": ["arcilator", "verilator"],
+                                 "extra_vsrcs": ["ext.sv"]})
+
+
 # --- top-level build/run defaults (jobs/sync_quantum/max_cycles/extra_args) -------
 
 def test_top_level_defaults(tmp_path):

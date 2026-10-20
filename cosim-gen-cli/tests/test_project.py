@@ -46,6 +46,12 @@ def test_qemu_makefile_from_cosim_json(tmp_path):
     assert "SYNC_QUANTUM := 50\n" in mk
 
 
+def test_extra_vsrcs_in_unit_makefile(tmp_path):
+    cfg = _cfg(tmp_path, design={"input": "d.fir", "extra_vsrcs": ["ext.sv"]})
+    mk = _render_unit_makefile(_unit_spec(cfg, cfg.components[0], False, tmp_path))
+    assert f"EXTRA_VSRCS := {tmp_path}/ext.sv\n" in mk
+
+
 def test_basename_collision_rejected(tmp_path):
     a = tmp_path / "a" / "bootrom.mem"
     a.parent.mkdir()

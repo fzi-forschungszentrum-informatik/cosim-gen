@@ -113,6 +113,7 @@ optional and defaults to "whole design, no QEMU coupling."
 - **`seqmem`** — passed to firtool as `--repl-seq-mem-file` (sequential memory
   extraction config).
 - **`annotations`** — passed to firtool as `--annotation-file`.
+- **`extra_vsrcs`** — Verilog sources passed to every verilator build.
 
 ### `qemu`
 

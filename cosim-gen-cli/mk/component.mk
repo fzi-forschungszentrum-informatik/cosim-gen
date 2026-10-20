@@ -113,8 +113,8 @@ $(O_VERILATOR)/vsrc/.stamp: $(HW_VERILATOR) | $(O_VERILATOR)
 	touch $@
 
 # touch: verilator leaves its outputs alone when the .sv didn't change.
-$(COMPONENT_LIB_VERILATOR) $(COMPONENT_RUNTIME_VERILATOR) $(COMPONENT_HDR_VERILATOR) &: $(O_VERILATOR)/vsrc/.stamp
-	+cd $(O_VERILATOR)/vsrc && SYSTEMC_INCLUDE=$(SYSTEMC_INCLUDE) SYSTEMC_LIBDIR=$(SYSTEMC_LIBDIR) SYSTEMC_CXX_FLAGS=-std=$(SYSTEMC_STD) $(VERILATOR) -sc -Mdir $(abspath $(O_VERILATOR))/verilator --top-module $(TOP_NAME) $(VERILATOR_ARGS) --build -j $(shell nproc) $(TOP_NAME).sv
+$(COMPONENT_LIB_VERILATOR) $(COMPONENT_RUNTIME_VERILATOR) $(COMPONENT_HDR_VERILATOR) &: $(O_VERILATOR)/vsrc/.stamp $(EXTRA_VSRCS)
+	+cd $(O_VERILATOR)/vsrc && SYSTEMC_INCLUDE=$(SYSTEMC_INCLUDE) SYSTEMC_LIBDIR=$(SYSTEMC_LIBDIR) SYSTEMC_CXX_FLAGS=-std=$(SYSTEMC_STD) $(VERILATOR) -sc -Mdir $(abspath $(O_VERILATOR))/verilator --top-module $(TOP_NAME) $(VERILATOR_ARGS) --build -j $(shell nproc) $(TOP_NAME).sv $(EXTRA_VSRCS)
 	touch $(COMPONENT_LIB_VERILATOR) $(COMPONENT_RUNTIME_VERILATOR) $(COMPONENT_HDR_VERILATOR)
 
 # sim.o also depends on V<Top>.h so a re-verilate re-triggers the recompile.
