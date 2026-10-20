@@ -31,6 +31,20 @@ def _run(cmd, **kw):
     subprocess.run([str(c) for c in cmd], check=True, **kw)
 
 
+def _jobs(cfg: Config) -> str:
+    return f"-j{cfg.jobs or os.cpu_count() or 1}"
+
+
+def _require_tools(tools: ResolvedToolchain, names: list[str], cmd: str) -> None:
+    missing = [name for name in names if tools[name] is None]
+    if missing:
+        hints = "\n".join(
+            f"  {name}: set toolchain.{name} in cosim.json, the {name.upper()} env var, or install it on $PATH"
+            for name in missing
+        )
+        raise RuntimeError(f"{cmd}: required tool(s) not found - {', '.join(missing)}\n{hints}")
+
+
 def _design_top_name(design_input: Path) -> str:
     # Read from the input: design.hw.mlir doesn't exist yet when the Makefiles are written.
     text = design_input.read_text()
@@ -183,7 +197,6 @@ def _render_qemu_makefile(cfg: Config) -> str:
 def _render_top_makefile(cfg: Config, tools: ResolvedToolchain, build_dir: Path,
                          units: list[dict]) -> str:
     """The top build/Makefile: lowers the design, builds libsystemctlm, then makes every unit."""
-    lowered_input = cfg.design.input.name.endswith(".mlir")
     # firrtl-keep-interfaces runs before cosim-extract's <type>_TOP rename.
     type_names = " ".join(c.type for c in cfg.components)
 
@@ -193,7 +206,7 @@ def _render_top_makefile(cfg: Config, tools: ResolvedToolchain, build_dir: Path,
         f"TLM_BUILD_DIR := {build_dir / 'systemctlm'}",
         ".DEFAULT_GOAL := all",
     ]
-    if not lowered_input:
+    if not cfg.design.lowered:
         # A make rule, so a .fir edit propagates to every unit.
         lines += [
             f"DESIGN_INPUT := {cfg.design.input}",
@@ -237,21 +250,21 @@ def _reject_basename_collisions(files: list[Path]) -> None:
         staged[f.name] = f
 
 
-def _missing_required_tools(cfg: Config, tools: ResolvedToolchain, lowered_input: bool) -> list[str]:
-    """The unresolved tools that `cosim build` needs for the configured backends and input."""
+def _build_tools(cfg: Config) -> list[str]:
+    """The tools `cosim build` needs for the configured backends and input."""
     backends = cfg.design.supported_backends
     required = ["cosim_extract", "systemc_include", "systemc_lib"]
     # verilator's --split-verilog needs firtool even for a lowered input.
-    if not lowered_input or "verilator" in backends:
+    if not cfg.design.lowered or "verilator" in backends:
         required.append("firtool")
     # firrtl-keep-interfaces only runs when lowering with components.
-    if not lowered_input and cfg.components:
+    if not cfg.design.lowered and cfg.components:
         required.append("cosim_plugin")
     if "arcilator" in backends:
         required += ["arcilator", "opt", "llc"]
     if "verilator" in backends:
         required.append("verilator")
-    return [name for name in required if tools[name] is None]
+    return required
 
 
 def build(cfg: Config, generate_only: bool = False) -> int:
@@ -259,24 +272,14 @@ def build(cfg: Config, generate_only: bool = False) -> int:
     build_dir.mkdir(parents=True, exist_ok=True)
     tools = resolve(cfg.toolchain)
 
-    lowered_input = cfg.design.input.name.endswith(".mlir")
-    missing = _missing_required_tools(cfg, tools, lowered_input)
-    if missing:
-        hints = "\n".join(
-            f"  {name}: set toolchain.{name} in cosim.json, the {name.upper()} env var, or install it on $PATH"
-            for name in missing
-        )
-        raise RuntimeError(f"cosim build: required tool(s) not found - {', '.join(missing)}\n{hints}")
+    _require_tools(tools, _build_tools(cfg), "cosim build")
 
     # firtool resolves MemoryFileInlineAnnotation filenames against build_dir.
     _reject_basename_collisions(_extra_files(cfg))
     for f in _extra_files(cfg):
         shutil.copy2(f, build_dir / f.name)
 
-    design_hw_mlir = (
-        cfg.design.input if lowered_input
-        else build_dir / "design.hw.mlir"
-    )
+    design_hw_mlir = cfg.design.input if cfg.design.lowered else build_dir / "design.hw.mlir"
 
     verilator_root = ""
     if "verilator" in cfg.design.supported_backends:
@@ -291,10 +294,10 @@ def build(cfg: Config, generate_only: bool = False) -> int:
     )
 
     # One unit per component, plus one for the whole design (soc_rtl).
-    comps: list = [c for c in cfg.components] + [cfg.soc_rtl]
-    wholes = [False] * len(cfg.components) + [True]
-    units = [_unit_spec(cfg, comp, whole, build_dir) for comp, whole in zip(comps, wholes)]
-    for comp, unit in zip(comps, units):
+    units = []
+    for comp, whole in [(c, False) for c in cfg.components] + [(cfg.soc_rtl, True)]:
+        unit = _unit_spec(cfg, comp, whole, build_dir)
+        units.append(unit)
         unit["dir"].mkdir(parents=True, exist_ok=True)
         for f in (comp.extra_files if comp is not None else []):
             shutil.copy2(f, unit["dir"] / f.name)
@@ -315,7 +318,7 @@ def build(cfg: Config, generate_only: bool = False) -> int:
     if generate_only:
         return 0
 
-    _run(["make", "-f", top_makefile, f"-j{cfg.jobs or os.cpu_count() or 1}", "all"], cwd=build_dir)
+    _run(["make", "-f", top_makefile, _jobs(cfg), "all"], cwd=build_dir)
 
     for unit in units:
         for backend in cfg.design.supported_backends:
@@ -343,12 +346,11 @@ def _gen_dtb(cfg: Config, tools: ResolvedToolchain, build_dir: Path, comp_names:
     cosim_dts = build_dir / "cosim.dts"
     overlay_paths: list[str] = []
     if comp_names:
-        comps_by_name = {c.name: c for c in cfg.components}
         tree, sys_bus = dts_overlay.open_base_tree(
             str(cfg.design.dts), tools["dtc"]
         )
         for name in comp_names:
-            comp = comps_by_name[name]
+            comp = cfg.component(name)
             unit_dir = build_dir / "components" / name
             typed_io = _component_typed_io(comp, unit_dir, backend)
             overlay_dts = dts_overlay.gen_component_dts(name, comp, typed_io, tree, sys_bus)
@@ -365,13 +367,12 @@ def _gen_dtb(cfg: Config, tools: ResolvedToolchain, build_dir: Path, comp_names:
 def _run_coupled(cfg: Config, tools: ResolvedToolchain, build_dir: Path, dtb: Path, comp_names: list[str],
                  backend: str) -> int:
     # One sim per component, each on its own remote-port socket under one machine path.
-    comps_by_name = {c.name: c for c in cfg.components}
     machine_path = Path(tempfile.mkdtemp(prefix="qemu-cosim."))
     procs = []
     try:
         sync_quantums = []
         for name in comp_names:
-            unit = _unit_spec(cfg, comps_by_name[name], False, build_dir)
+            unit = _unit_spec(cfg, cfg.component(name), False, build_dir)
             sync_quantums.append(unit["sync_quantum"])
             # QEMU's rp_autocreate_chardev() naming.
             sock = machine_path / f"qemu-rport-{name.lower()}"
@@ -396,29 +397,6 @@ def _run_coupled(cfg: Config, tools: ResolvedToolchain, build_dir: Path, dtb: Pa
     return 0
 
 
-def _resolve_sim_target(cfg: Config, build_dir: Path, component: str | None, backend: str) -> Path:
-    # No component means the whole design.
-    name = _design_top_name(cfg.design.input) if component is None else component
-    if component is not None:
-        valid = {c.name for c in cfg.components}
-        if component not in valid:
-            raise RuntimeError(f"Unknown component {component!r}; valid: {', '.join(sorted(valid))}")
-    return build_dir / "components" / name / f"build-{backend}" / "sim"
-
-
-def _require_run_tools(tools: ResolvedToolchain) -> None:
-    """Fails unless qemu and dtc, needed only by `cosim run`, are resolved."""
-    missing = [name for name in ("qemu", "dtc") if tools[name] is None]
-    if missing:
-        hints = "\n".join(
-            f"  {name}: set toolchain.{name} in cosim.json, the {name.upper()} env var, or install it on $PATH"
-            for name in missing
-        )
-        raise RuntimeError(
-            f"cosim run: required tool(s) not found - {', '.join(missing)}\n{hints}"
-        )
-
-
 def run(cfg: Config, mode: str, components: list[str] | None = None, backend: str | None = None) -> int:
     build_dir = cfg.root / "build"
     tools = resolve(cfg.toolchain)
@@ -430,18 +408,16 @@ def run(cfg: Config, mode: str, components: list[str] | None = None, backend: st
             f"({', '.join(cfg.design.supported_backends)})"
         )
     if mode != "rtl":
-        _require_run_tools(tools)
+        _require_tools(tools, ["qemu", "dtc"], "cosim run")
 
     if mode == "rtl":
         if len(components) > 1:
             raise RuntimeError("'rtl' mode runs one target standalone - pass at most one component name.")
-        comp_name = components[0] if components else None
-        is_component = comp_name is not None
-        comp = cfg.soc_rtl if not is_component else next((c for c in cfg.components if c.name == comp_name), None)
-        _resolve_sim_target(cfg, build_dir, comp_name, backend)  # raises if comp_name is unknown
-        unit = _unit_spec(cfg, comp, not is_component, build_dir)
-        jobs = f"-j{cfg.jobs or os.cpu_count() or 1}"
-        _run(["make", "-C", unit["dir"], jobs, "run", f"BACKEND={backend}"])
+        if components:
+            unit = _unit_spec(cfg, cfg.component(components[0]), False, build_dir)
+        else:
+            unit = _unit_spec(cfg, cfg.soc_rtl, True, build_dir)
+        _run(["make", "-C", unit["dir"], _jobs(cfg), "run", f"BACKEND={backend}"])
         return 0
 
     if mode == "qemu":
@@ -453,13 +429,8 @@ def run(cfg: Config, mode: str, components: list[str] | None = None, backend: st
             return 0
 
         # Only these components' overlays, or QEMU waits on sockets nobody serves.
-        valid = {c.name for c in cfg.components}
-        unknown = [name for name in components if name not in valid]
-        if unknown:
-            raise RuntimeError(f"Unknown component(s) {', '.join(unknown)}; valid: {', '.join(sorted(valid))}")
-        comps_by_name = {c.name: c for c in cfg.components}
         for name in components:
-            typed_io = _component_typed_io(comps_by_name[name], build_dir / "components" / name, backend)
+            typed_io = _component_typed_io(cfg.component(name), build_dir / "components" / name, backend)
             if not typed_io.needs_qemu:
                 raise RuntimeError(f"{name!r} has no bus/interrupt/gpio IO - use `cosim run rtl {name}` instead.")
         dtb = _gen_dtb(cfg, tools, build_dir, components, backend)

@@ -334,30 +334,13 @@ def test_supported_backends_default_to_verilator(tmp_path):
     assert d.supported_backends == ["verilator"]
 
 
-def test_supported_backends_must_be_non_empty_list():
+@pytest.mark.parametrize("backends", [
+    [], "arcilator", ["arcilator", "questasim"], ["arcilator", "arcilator"],
+])
+def test_supported_backends_rejected(backends):
     with pytest.raises(ValueError) as exc_info:
-        DesignConfig.load(None, {"input": "d.fir", "supported_backends": []})
-    assert "must be a non-empty list" in str(exc_info.value)
-
-
-def test_supported_backends_not_a_list_rejected():
-    with pytest.raises(TypeError) as exc_info:
-        DesignConfig.load(None, {"input": "d.fir", "supported_backends": "arcilator"})
-    assert "must be a list" in str(exc_info.value)
-    assert "arcilator" in str(exc_info.value)
-
-
-def test_supported_backends_rejects_unknown_value():
-    with pytest.raises(ValueError) as exc_info:
-        DesignConfig.load(None, {"input": "d.fir", "supported_backends": ["arcilator", "questasim"]})
-    assert "must be 'arcilator' or 'verilator'" in str(exc_info.value)
-    assert "questasim" in str(exc_info.value)
-
-
-def test_supported_backends_rejects_duplicates():
-    with pytest.raises(ValueError) as exc_info:
-        DesignConfig.load(None, {"input": "d.fir", "supported_backends": ["arcilator", "arcilator"]})
-    assert "duplicate entries" in str(exc_info.value)
+        DesignConfig.load(None, {"input": "d.fir", "supported_backends": backends})
+    assert "design.supported_backends must be a non-empty list" in str(exc_info.value)
 
 
 def test_supported_backends_valid(tmp_path):

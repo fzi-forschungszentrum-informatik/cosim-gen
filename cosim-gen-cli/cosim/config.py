@@ -106,29 +106,22 @@ class DesignConfig:
     # Backends `cosim build` builds; `cosim run` defaults to the first.
     supported_backends: list[str] = field(default_factory=list)
 
+    @property
+    def lowered(self) -> bool:
+        """Whether `input` is already hw-dialect MLIR, skipping firtool."""
+        return self.input.name.endswith(".mlir")
+
     @staticmethod
     def load(root: Path, d: dict) -> DesignConfig:
-        if "input" not in d:
-            raise ValueError("cosim.json: design.input is required")
-        if not d["input"]:
+        if not d.get("input"):
             raise ValueError("cosim.json: design.input must be a non-empty path")
         backends = d.get("supported_backends", ["verilator"])
-        if not isinstance(backends, list):
-            raise TypeError(
-                f"cosim.json: design.supported_backends must be a list, got {backends!r}"
-            )
-        if not backends:
+        if (not isinstance(backends, list) or not backends
+                or not set(backends) <= {"arcilator", "verilator"} or len(set(backends)) != len(backends)):
             raise ValueError(
-                "cosim.json: design.supported_backends must be a non-empty list"
+                "cosim.json: design.supported_backends must be a non-empty list of distinct "
+                f"'arcilator'/'verilator', got {backends!r}"
             )
-        bad = [b for b in backends if b not in ("arcilator", "verilator")]
-        if bad:
-            raise ValueError(
-                f"cosim.json: design.supported_backends entries must be 'arcilator' or "
-                f"'verilator', got {bad!r}"
-            )
-        if len(set(backends)) != len(backends):
-            raise ValueError(f"cosim.json: design.supported_backends has duplicate entries: {backends!r}")
         return DesignConfig(
             input=_resolve(root, d["input"]),
             dts=_resolve(root, d.get("dts")),
@@ -212,8 +205,7 @@ class Component(UnitSettings):
 
         interfaces = [load_interface(i, what) for i in d["interfaces"]]
 
-        clocks = [i for i in interfaces if isinstance(i, ClockInterface)]
-        if len(clocks) < 1:
+        if not any(isinstance(i, ClockInterface) for i in interfaces):
             raise ValueError(
                 f"cosim.json: {what} needs at least one 'clock' interface (the first one "
                 "declared is the anchor every other port's instance prefix is derived "
@@ -274,7 +266,7 @@ class ToolchainConfig:
 
     @staticmethod
     def load(d: dict) -> ToolchainConfig:
-        known = {f.name for f in ToolchainConfig.__dataclass_fields__.values()}
+        known = {f.name for f in fields(ToolchainConfig)}
         unknown = set(d) - known
         if unknown:
             raise ValueError(f"cosim.json: unknown toolchain key(s): {sorted(unknown)}")
@@ -332,10 +324,8 @@ class Config(UnitSettings):
             **(copy.deepcopy(UnitSettings.DEFAULTS) | UnitSettings._load_settings(d, "top level")),
         )
 
-        seen: dict[str, int] = {}
-        for c in cfg.components:
-            seen[c.name] = seen.get(c.name, 0) + 1
-        dupes = sorted(name for name, count in seen.items() if count > 1)
+        names = [c.name for c in cfg.components]
+        dupes = sorted({n for n in names if names.count(n) > 1})
         if dupes:
             raise ValueError(
                 f"cosim.json: component name(s) collide: {dupes!r} - each component's "
@@ -344,3 +334,11 @@ class Config(UnitSettings):
             )
 
         return cfg
+
+    def component(self, name: str) -> Component:
+        """The declared component `name`; raises if there is none."""
+        for c in self.components:
+            if c.name == name:
+                return c
+        valid = ", ".join(sorted(c.name for c in self.components))
+        raise RuntimeError(f"Unknown component {name!r}; valid: {valid}")
