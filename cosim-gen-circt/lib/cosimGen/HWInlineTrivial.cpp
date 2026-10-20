@@ -80,10 +80,8 @@ private:
     auto body = mod.getBodyBlock();
     unsigned no_ops = body->getOperations().size();
     auto hwOut = body->getTerminator();
-    if (hwOut->getNumOperands() == 0 && hwOut->getNumResults() == 0) {
-      llvm::errs() << mod.getModuleName() << "\n";
+    if (hwOut->getNumOperands() == 0 && hwOut->getNumResults() == 0)
       return true;
-    }
     /* Skip big modules to save time */
     if (no_ops > 1000)
       return false;

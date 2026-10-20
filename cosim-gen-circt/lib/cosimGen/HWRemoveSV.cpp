@@ -145,8 +145,6 @@ public:
         toDel.push_back(op);
       }
     });
-    // mod.walk([&](emit::FragmentOp op) { toDel.push_back(op); });
-    // mod.walk([&](emit::FileOp op) { toDel.push_back(op); });
 
     auto unused = deleteOperation(toDel);
 

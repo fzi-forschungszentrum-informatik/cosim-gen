@@ -1,14 +1,5 @@
-"""The abstract memory-mapped bus interface.
-
-A bus is a protocol bundle: several leaf ports sharing one common prefix,
-wired to QEMU through a TLM bridge. Unlike an interrupt there's no "exact
-name" case - a bundle always decomposes into `_a_valid`, `_a_bits_opcode`, ...
-
-A concrete protocol subclasses this, declares its signal layout and the bridge
-it binds to, and registers itself under its own `kind`. Adding AXI (whose
-bridge headers already ship in the libsystemctlm-soc submodule) is adding one
-such file - there are no `if bus.typ == ...` branches anywhere in the codegen
-to extend."""
+"""The abstract memory-mapped bus: leaf ports under one prefix, wired to QEMU
+through a TLM bridge. A protocol subclass declares its signals and bridge."""
 
 from __future__ import annotations
 
@@ -30,21 +21,14 @@ class BusInterface(Interface):
     BRIDGE_CLASS:    ClassVar[dict[BusDir, str]] = {}
     # The bridge member qemu.pub_mem_*[i] binds to.
     SOCKET_MEMBER:   ClassVar[dict[BusDir, str]] = {}
-    # How the template reaches the bridge's per-wire signals: TL nests them in
-    # a `signals` sub-struct (bridge.signals.a_valid), so "signals."; a bridge
-    # exposing them as direct members would use "". Keeps the sim.cpp template
-    # free of any one protocol's member layout.
+    # Prefix of the bridge's signal members, e.g. "signals." for TileLink.
     SIGNAL_ACCESSOR: ClassVar[str] = ""
 
     dir: BusDir = BusDir.SLAVE
-    # The prefix as the *extracted* ports spell it ("uart_0_auto_control_xing_in"),
-    # vs the declared bare `name` ("auto_control_xing_in"). This one names the
-    # sim.cpp bridge member and the dts label, so the two can't be merged.
+    # The prefix as the extracted ports spell it; names the bridge member and dts label.
     port_prefix: str = ""
     io: dict[str, StateInfo] = field(default_factory=dict)
-    # Which declared clock/reset interface (by name) this bus is wired to -
-    # only meaningful when the owning component has more than one of either;
-    # None means "the first declared", matching every single-clock component.
+    # Clock/reset interface names; None means the first declared.
     clock: str | None = None
     reset: str | None = None
 
@@ -61,9 +45,7 @@ class BusInterface(Interface):
         raise NotImplementedError
 
     def ctor_init(self, member: str, clock: str, reset: str) -> str:
-        """This bridge's sim.cpp constructor init-list entry. The default is
-        TileLink's 3-arg convenience ctor; a protocol whose bridge takes a
-        different signature overrides it."""
+        """The bridge's sim.cpp constructor init-list entry."""
         return f'{member}("{member}", {clock}, {reset})'
 
     @classmethod
@@ -95,9 +77,6 @@ class BusInterface(Interface):
         return [f"{self.name}.*$"]
 
     def resolve(self, m: PortMatcher) -> BusInterface:
-        """Resolve each of the protocol's expected signal suffixes under this
-        bus's prefix. Unlike a wire interface the prefix is already known, so
-        this looks signals up rather than searching for them."""
         prefix = m.resolve_prefix(self.name)
         io: dict[str, StateInfo] = {}
         for sig in self.SIGNALS[self.dir]:

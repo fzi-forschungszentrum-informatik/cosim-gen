@@ -32,15 +32,6 @@ size_t eraseUnused(hw::HWModuleOp hwModule, igraph::InstanceGraph *igraph = null
 size_t eraseUnusedSimple(hw::HWModuleOp hwModule, igraph::InstanceGraph *igraph = nullptr);
 size_t tryConstFold(hw::HWModuleOp hwModule, OpBuilder &builder);
 
-static inline std::string val2Str(mlir::Value val, hw::HWModuleLike mod) {
-  std::string str;
-  llvm::raw_string_ostream os(str);
-  mlir::AsmState asmState(mod, mlir::OpPrintingFlags().assumeVerified());
-  val.printAsOperand(os, asmState);
-  os.flush();
-  return str;
-}
-
 } // namespace cosimGen
 } // namespace circt
 

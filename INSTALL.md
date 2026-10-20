@@ -1,18 +1,12 @@
 # Installing on your host
 
-The recommended and best-tested installation method is Docker; see
-[`README.md#install`](README.md#install) and [`DOCKER.md`](DOCKER.md). This document
-describes how to install the full toolchain directly on your host instead — for example,
-to develop `cosim-gen-circt` with your own toolchain, or in environments where Docker is
-not available. Each piece below can be installed however you like — a distribution
-package, a source build per that project's own docs, or the exact versions this repo's
-[`Dockerfile`](Dockerfile) happens to pin, shown here as one convenient option, not a
-requirement. The only thing that actually matters is that `cosim doctor` (see
-[Verification](#verification)) finds all of them afterward.
+The recommended installation is Docker; see [`README.md#install`](README.md#install) and
+[`DOCKER.md`](DOCKER.md). This document installs the toolchain directly on your host. Each
+piece can come from anywhere (distribution package, source build, or the versions the
+[`Dockerfile`](Dockerfile) pins) as long as `cosim doctor` (see
+[Verification](#verification)) finds it.
 
 ## Overview
-
-A working installation requires separate components.
 
 | Component | Purpose | Installation method |
 |---|---|---|
@@ -26,10 +20,7 @@ A working installation requires separate components.
 
 ## Step 1: System packages
 
-The packages below are Debian/Ubuntu (`apt`) package names, matching what
-[`Dockerfile`](Dockerfile) installs — needed only if you follow the from-source paths
-below rather than distro packages/prebuilt releases for CIRCT and Verilator. Substitute
-the equivalent packages if you are on a different distribution.
+Debian/Ubuntu package names, as installed by the [`Dockerfile`](Dockerfile):
 
 ```sh
 sudo apt-get install -y \
@@ -40,14 +31,8 @@ sudo apt-get install -y \
     libz3-4 libsystemc-dev device-tree-compiler
 ```
 
-`clang`/`clang++` are the compilers used to build every component below, and are always
-needed regardless of how you install CIRCT/Verilator (`cosim-gen-circt` and `qemu-fdt`
-still build with them). `libsystemc-dev` provides SystemC and `device-tree-compiler`
-provides `dtc` directly — neither requires a build either way.
-`autoconf`/`flex`/`bison`/`help2man`/`libfl-dev` are only needed for building Verilator
-from source (Step 4); `libglib2.0-dev`/`libpixman-1-dev`/`meson`/`bzip2` are only needed
-for building `qemu-fdt` (Step 5), which is always a source build regardless of how you
-install the rest.
+`autoconf`/`flex`/`bison`/`help2man`/`libfl-dev` are only needed to build Verilator
+(Step 4), `libglib2.0-dev`/`libpixman-1-dev`/`meson`/`bzip2` only for `qemu-fdt` (Step 5).
 
 ## Step 2: Clone the submodules
 
@@ -61,8 +46,7 @@ git submodule update --init
 
 ## Step 3: CIRCT
 
-Any CIRCT install works, as long as `firtool`/`arcilator` end up resolvable (see below).
-Two options:
+Any CIRCT install works:
 
 - **Build from source** — see [CIRCT's own getting-started
   docs](https://circt.llvm.org/getting_started/) for the full LLVM/MLIR build.
@@ -79,15 +63,12 @@ Two options:
   export LD_LIBRARY_PATH=~/.local/opt/circt/lib:$LD_LIBRARY_PATH
   ```
 
-Either way, add the result's `bin/` directory to `PATH` (and `lib/` to
-`LD_LIBRARY_PATH` for a shared build). Both the `cosim-gen-circt` build (Step 6) and
-`cosim` itself need `firtool`/`arcilator` to resolve this way, or via the `COSIM_*`
-overrides described in [Toolchain resolution](#toolchain-resolution) below.
+Either way, add its `bin/` to `PATH` (and `lib/` to `LD_LIBRARY_PATH` for a shared
+build), or see [Toolchain resolution](#toolchain-resolution).
 
 ## Step 4: Verilator
 
-This repo is tested against `v5.050`; anything reasonably recent (`v5.0+`) should work.
-Two options:
+Tested with `v5.050`; any `v5.0+` should work.
 
 - **Distribution package**, if your distro ships a recent enough version.
 - **Build from source** — see [Verilator's own install
@@ -109,14 +90,9 @@ Two options:
 
 ## Step 5: `qemu-fdt`
 
-Unlike CIRCT/Verilator, there's no alternate install path here: `cosim` needs the
-remote-port and device-tree support this repo's QEMU fork adds, so it must be built from
-the `qemu-fdt/` submodule fetched in Step 2 — not a system QEMU package, and not an
-upstream QEMU checkout. Otherwise this is QEMU's own standard build process; see
-[`qemu-fdt/README.rst`](qemu-fdt/README.rst) or
-[wiki.qemu.org/Hosts/Linux](https://wiki.qemu.org/Hosts/Linux) for platform-specific
-build dependencies and troubleshooting. The one thing to get right for `cosim` that
-upstream QEMU's docs won't tell you is the target list:
+`cosim` needs this QEMU fork's remote-port and device-tree support, so build it from the
+`qemu-fdt/` submodule. It's QEMU's standard build (see
+[`qemu-fdt/README.rst`](qemu-fdt/README.rst)) with the RISC-V target list:
 
 ```sh
 cd qemu-fdt
@@ -133,31 +109,11 @@ cd ../..
 
 ## Step 6: `cosim-gen-circt` (the pass library)
 
-This build links against the CIRCT installed in Step 3. `find_package(CIRCT REQUIRED
-CONFIG)` locates `lib/cmake/circt` relative to `firtool` on `PATH` (already exported
-above); if that resolution fails, pass `-DCIRCT_DIR=<circt install>/lib/cmake/circt`
-explicitly.
-
-```sh
-cd cosim-gen-circt
-mkdir build && cd build
-cmake .. -GNinja \
-    -DCMAKE_CXX_COMPILER=clang++ \
-    -DCMAKE_C_COMPILER=clang \
-    -DLLVM_ENABLE_ZSTD=Off
-ninja check-cosim-gen
-cd ../..
-```
-
-`check-cosim-gen` runs the lit suite as a build sanity check. See
-[`cosim-gen-circt/README.md`](cosim-gen-circt/README.md) for the passes this produces
-(`build/bin/cosim-extract`, `build/bin/cosim-gen-opt`) and how to invoke them directly.
+Build it as described in [`cosim-gen-circt/README.md`](cosim-gen-circt/README.md#building).
 
 ## Step 7: `cosim` (the CLI)
 
-Install as an editable package into a virtual environment at the repository root, so
-that its relative-path resolution (`cosim/paths.py`) can locate `mk/`, `include/`, and
-other sibling directories:
+Install it editable, so it finds `mk/` and `include/` in the checkout:
 
 ```sh
 python3 -m venv .venv
@@ -165,35 +121,17 @@ python3 -m venv .venv
 export PATH=$PWD/.venv/bin:$PATH
 ```
 
-See [`cosim-gen-cli/README.md#install`](cosim-gen-cli/README.md#install) for exactly what
-this does and does not install.
-
 ## Verification
 
 ```sh
 cosim doctor
 ```
 
-Reports the resolved path for every component above (`firtool`, `arcilator`,
-`cosim-extract`, `cosim-gen-opt`, `verilator`, `qemu`, `dtc`, and SystemC's
-include/lib directories). Resolve anything it reports as missing before attempting a
-real build. Then confirm the pipeline end to end:
-
-```sh
-cd example
-make               # unpacks the design and builds the firmware it needs (see example/README.md)
-cosim build -C cosim.json
-cosim run --all
-```
+Shows the resolved path of every tool; fix anything missing. Then run the
+[Quick start](README.md#quick-start).
 
 ## Toolchain resolution
 
-None of the components above needs to live at a fixed path. For each tool, `cosim`
-resolves it in the following order: a `toolchain.<name>` entry in `cosim.json`, an
-environment variable (`FIRTOOL`, `ARCILATOR`, `VERILATOR`, `DTC`, `QEMU`, `EXTRACT` for
-`cosim-extract`, `COSIM_GEN_OPT`, `COSIM_PLUGIN`, `SYSTEMC_INCLUDE`/`SYSTEMC_LIB` or
-`COSIM_SYSTEMC`/`SYSTEMC_HOME` for a SystemC install prefix), then `PATH`. This is
-useful if your installs live somewhere other than the layout used above — for example,
-distribution packages, or multiple versions installed side by side. See
-[`cosim-gen-cli/README.md#toolchain-resolution`](cosim-gen-cli/README.md#toolchain-resolution)
-for the complete list and fallback order.
+`cosim` resolves each tool from a `toolchain.<name>` entry in `cosim.json`, then an
+environment variable, then `PATH`; see
+[`cosim-gen-cli/README.md#toolchain-resolution`](cosim-gen-cli/README.md#toolchain-resolution).

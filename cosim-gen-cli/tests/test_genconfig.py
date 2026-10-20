@@ -19,11 +19,6 @@ _DIPLOMACY = {
 
 
 def test_gen_config_succeeds_on_fresh_output(tmp_path):
-    """A freshly scaffolded cosim.json deliberately has a null freq_mhz (the
-    user must fill it in - diplomacy has no notion of clock frequency) and an
-    empty design.input/dts (gen-config only derives 'components', never the
-    design's own input file) - neither gap should make gen_config report
-    failure, since both are expected and reported via the printed notes."""
     diplomacy_path = tmp_path / "design.diplomacy.json"
     diplomacy_path.write_text(json.dumps(_DIPLOMACY))
     out = tmp_path / "cosim.json"

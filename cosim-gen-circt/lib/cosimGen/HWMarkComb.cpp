@@ -144,9 +144,6 @@ private:
   void tagAllOutputs(HWMarkCombPtr modT) {
     auto hwModule = modT->getModule();
     circt::hw::ModulePortInfo instPorts(hwModule.getPortList());
-    // for (auto [i, port] : llvm::enumerate(instPorts.getInputs())) {
-    //   modT->tagInput(i);
-    // }
     for (auto [i, port] : llvm::enumerate(instPorts.getOutputs())) {
       modT->tagOutput(i);
     }
@@ -190,7 +187,6 @@ private:
     for (auto i : modT->unprocessedIO.output) {
       mark(outOp);
       auto val = outOp->getOperand(i);
-      // llvm::errs() << "\t\tMARKCOMB OUT " << val2Str(val, mod) << " for " << mod.getOutputName(i) << "\n";
       backProp.push_back(val);
     }
     modT->unprocessedIO.output.clear();
@@ -200,9 +196,6 @@ private:
 
       for (auto i : ports.input) {
         auto val = inst->getOperand(i);
-        // llvm::errs() << "\t\tMARKCOMB INST IN " << val2Str(val, mod) << " from " <<
-        // instT->getModule().getModuleName()
-        //              << " " << instT->getModule().getInputName(i) << "\n";
         backProp.push_back(val);
       }
     }
@@ -225,7 +218,6 @@ private:
         } else {
           if (isa<comb::CombDialect>(defOp->getDialect()) || isa<hw::WireOp>(defOp)) {
             for (auto in : defOp->getOperands()) {
-              // llvm::errs() << "\t\tFOLLOW SRC " << val2Str(in, mod) << "\n";
               backProp.push_back(in);
             }
           }
@@ -243,7 +235,6 @@ private:
 
     for (auto i : modT->unprocessedIO.input) {
       auto val = body->getArgument(i);
-      // llvm::errs() << "\t\tMARKCOMB IN " << val2Str(val, mod) << " for " << mod.getInputName(i) << "\n";
       forwardProp.push_back(val);
     }
     modT->unprocessedIO.input.clear();
@@ -251,9 +242,6 @@ private:
       struct HWModuleIOMarkComb &ports = instT->taggedIO;
       for (auto i : ports.output) {
         auto val = inst->getResult(i);
-        // llvm::errs() << "\t\tMARKCOMB INST OUT " << val2Str(val, mod) << " from " <<
-        // instT->getModule().getModuleName()
-        //              << " " << instT->getModule().getOutputName(i) << "\n";
         forwardProp.push_back(val);
       }
     }
@@ -275,7 +263,6 @@ private:
           modT->tagOutput(opOp.getOperandNumber());
         } else if (isa<comb::CombDialect>(useOp->getDialect()) || isa<hw::WireOp>(useOp)) {
           for (auto res : useOp->getResults()) {
-            // llvm::errs() << "\t\tFOLLOW DRIVER " << val2Str(res, mod) << "\n";
             forwardProp.push_back(res);
           }
         }

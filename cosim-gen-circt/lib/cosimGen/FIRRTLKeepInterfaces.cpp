@@ -24,12 +24,8 @@ namespace {
 struct FIRRTLKeepInterfacesPass : impl::FIRRTLKeepInterfacesBase<FIRRTLKeepInterfacesPass> {
 
 private:
-  // Recurses into both BundleType and FVectorType so every ground-type leaf
-  // (including individual vector elements, e.g. a `pins: {...}[8]` GPIO
-  // array) gets its own dont-touch. A dont-touch on a whole vector - rather
-  // than on each of its elements - blocks firtool's aggregate lowering from
-  // subdividing that port at all ("port should be subdivided, but cannot
-  // because of annotations on a vector").
+  // Every ground-type leaf, vector elements included: a dont-touch on a whole
+  // vector stops firtool from lowering the port.
   void getLeafTypes(firrtl::FIRRTLBaseType type, llvm::SmallVector<uint64_t> &fieldIds, uint64_t curId = 0) {
     if (auto bt = dyn_cast<firrtl::BundleType>(type)) {
       for (auto [i, el] : llvm::enumerate(bt.getElements()))

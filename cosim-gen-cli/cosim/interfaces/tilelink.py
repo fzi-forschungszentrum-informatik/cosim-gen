@@ -1,8 +1,4 @@
-"""TileLink: signal layout, TLM bridges, and bridge template arguments.
-
-Everything TileLink-specific in cosim-gen lives here. The C++ side is
-include/tilelink.h (the TLSignals struct), include/TLM2TLBridge.h (QEMU is
-master) and include/TL2TLMBridge.h (the peripheral is master)."""
+"""TileLink: signal layout, TLM bridges and bridge template arguments."""
 
 from __future__ import annotations
 
@@ -13,10 +9,7 @@ from ..statejson import StateType, short_type
 from . import BusDir, BusSignal, flip_signals
 from .bus import BusInterface
 
-# The slave view: a TL slave receives the A channel and drives the D channel.
-# Each entry's `names` are the accepted port suffixes, most-preferred first -
-# FIRRTL emits either `_a_opcode` or `_a_bits_opcode` depending on how the
-# bundle was flattened, and `names[0]` is the key the codegen looks it up by.
+# The slave view: A channel in, D channel out.
 _TL_SLAVE_SIGNALS = [
     BusSignal(StateType.INPUT,  False, ["a_valid"]),
     BusSignal(StateType.INPUT,  False, ["a_opcode", "a_bits_opcode"]),

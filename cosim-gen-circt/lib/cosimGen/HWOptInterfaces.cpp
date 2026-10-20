@@ -68,18 +68,12 @@ public:
       return false;
 
     llvm::SmallVector<mlir::Value> worklist(defOp->getOperands().begin(), defOp->getOperands().end());
-    // std::optional<unsigned> foundPort;
 
     while (!worklist.empty()) {
       mlir::Value curVal = worklist.pop_back_val();
 
-      if (auto arg = llvm::dyn_cast<mlir::BlockArgument>(curVal)) {
-        // unsigned port = arg.getArgNumber();
-        // if (foundPort && *foundPort != port)
-        // return false;
-        // foundPort = port;
+      if (llvm::isa<mlir::BlockArgument>(curVal))
         continue;
-      }
 
       mlir::Operation *curOp = curVal.getDefiningOp();
       assert(curOp);
@@ -210,7 +204,6 @@ public:
       }
 
       if (inst->use_empty()) {
-        // inst->setAttr(UNUSED, UnitAttr::get(curInst->getContext()));
         use->erase();
         inst->erase();
       }
@@ -331,7 +324,6 @@ public:
         if (constL.getValue() == constR.getValue())
           return true;
 
-    llvm::errs() << "ToDo: Might be the same: \n" << lhs << "\n == \n" << rhs << "\n";
     /* ToDo: Check more complex scenarios */
     return false;
   }

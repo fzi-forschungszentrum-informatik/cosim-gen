@@ -243,7 +243,6 @@ public:
 
     for (auto i : modT->unprocessedIO.output) {
       auto val = outputOp.getOperand(i);
-      // llvm::errs() << "\t\tTAINT SINK " << val2Str(val, mod) << " for " << mod.getOutputName(i) << "\n";
       sinks.push_back(val);
     }
     modT->unprocessedIO.output.clear();

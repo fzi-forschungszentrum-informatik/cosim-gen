@@ -1,7 +1,5 @@
-# Builds bootrom.elf and simram.elf from src/ with clang/lld (no gcc - matches
-# the project's Dockerfile, which no longer installs one), converts them to
-# the .mem files cosim.json's MemoryFileInlineAnnotation loads, and can drive
-# `cosim build` to extract+build the whole design from them.
+# Builds bootrom.elf and simram.elf from src/ with clang/lld, converts them to
+# the .mem files cosim.json loads, and can run `cosim build`.
 
 CC      := clang
 DTC     := dtc

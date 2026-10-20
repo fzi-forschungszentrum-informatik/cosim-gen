@@ -66,7 +66,6 @@ static void deleteInst(igraph::InstanceGraph *igraph, igraph::InstanceOpInterfac
 }
 
 static size_t eraseUnusedSet(llvm::SmallDenseSet<mlir::Operation *> &toDel, igraph::InstanceGraph *igraph) {
-  // llvm::SmallDenseSet<mlir::Operation *> &deletedOps;
   size_t no_del_ops = 0;
 
   while (!toDel.empty()) {
@@ -154,8 +153,6 @@ size_t eraseUnused(hw::HWModuleOp hwModule, igraph::InstanceGraph *igraph) {
               next.insert(use);
               used.insert(use);
             }
-            // llvm::SmallVector<mlir::SideEffects::EffectInstance<mlir::MemoryEffects::Effect>> effects;
-            // memOp.getEffects(effects);
           }
         }
       next.insert(defOp);

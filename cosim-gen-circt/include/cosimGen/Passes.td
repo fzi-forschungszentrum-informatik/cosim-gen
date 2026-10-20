@@ -36,11 +36,11 @@ def HWTaint : Pass<"hw-taint", "::mlir::ModuleOp"> {
 }
 
 def HWMarkComb : Pass<"hw-mark-comb", "::mlir::ModuleOp"> {
-  let summary = "Delete parts not connected to subdesign";
+  let summary = "Mark the combinational logic connected to an instance's ports";
   let dependentDialects = ["circt::hw::HWDialect"];
   let options = [
     Option<"path", "path", "std::string", "",
-     "Select a new top module by an instance path">,
+     "Instance path whose ports are followed">,
     Option<"strRegex", "port", "std::string", "\"*\"",
      "Regex of ports that need to be checked.">,
   ];
@@ -74,11 +74,10 @@ def HWPropPorts2TLM : Pass<"hw-prop-ports-to-tlm", "::mlir::ModuleOp"> {
 }
 
 def HWDme : Pass<"hw-dme", "::mlir::ModuleOp"> {
-  let summary = "HW dead code elimation";
+  let summary = "HW dead code elimination";
   let dependentDialects = ["circt::hw::HWDialect"];
 }
 
-//def HWRemoveSV : Pass<"hw-remove-sv", "hw::HWModuleOp"> {
 def HWRemoveSV : Pass<"hw-remove-sv", "::mlir::ModuleOp"> {
   let summary = "Remove sv asserts and prints";
   let dependentDialects = ["circt::hw::HWDialect"];
@@ -115,7 +114,7 @@ def HWKeepPath : Pass<"hw-keep-path", "::mlir::ModuleOp"> {
   let dependentDialects = ["circt::hw::HWDialect"];
   let options = [
     Option<"path", "path", "std::string", "",
-     "Instance path whose module chain is protected from folding/inlining">
+     "Instance path whose module chain is tagged">
   ];
 }
 
@@ -148,11 +147,11 @@ def HWOptInterfaces : Pass<"hw-opt-interfaces", "::mlir::ModuleOp"> {
 
 
 def HWMoveCombUp : Pass<"hw-move-comb-up", "::mlir::ModuleOp"> {
-  let summary = "Remove unused inputs and propagate const outputs";
+  let summary = "Move the combinational logic at an instance's ports into the instance";
   let dependentDialects = ["circt::hw::HWDialect"];
   let options = [
     Option<"path", "path", "std::string", "",
-     "Select a instance to move comb into">
+     "Instance path to move the port logic into">
   ];
 }
 
@@ -180,13 +179,12 @@ def HWRenameTop : Pass<"hw-rename-top", "::mlir::ModuleOp"> {
   ];
 }
 
-//def FIRRTLKeepInterfaces : Pass<"firrtl-keep-interfaces", "firrtl::FModuleOp"> {
 def FIRRTLKeepInterfaces : Pass<"firrtl-keep-interfaces", "mlir::ModuleOp"> {
   let summary = "FIRRTL keep interfaces for given modules";
   let dependentDialects = ["circt::firrtl::FIRRTLDialect"];
   let options = [
     Option<"strModules", "mod", "std::string", "",
-     "Select a module to chipletify">
+     "Modules whose ports get a dont-touch">
   ];
 }
 

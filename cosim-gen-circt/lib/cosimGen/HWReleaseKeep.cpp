@@ -25,15 +25,7 @@ namespace circt::cosimGen {
 namespace {
 
 // Drops the module-level KEEP attribute from the modules along the extraction
-// path - the exact chain hw-keep-path (and hw-prop-ports-to-tlm) tagged to
-// protect the target from folding/inlining while it was being extracted. Once
-// extraction (hw-taint) is done that protection must be released so the later
-// opt passes can optimize the target like anything else. This is a deliberately
-// explicit, standalone, path-scoped step - it used to be a blanket side effect
-// at the end of hw-taint. Per-port {keep} tags are left untouched (they live in
-// port dictionaries, not as an op attr, and are stripped later by
-// hw-remove-custom-attr); they keep guarding the propagated ports through the
-// remaining opt passes.
+// path. Per-port {keep} tags stay.
 struct HWReleaseKeepPass : impl::HWReleaseKeepBase<HWReleaseKeepPass> {
 public:
   using impl::HWReleaseKeepBase<HWReleaseKeepPass>::HWReleaseKeepBase;

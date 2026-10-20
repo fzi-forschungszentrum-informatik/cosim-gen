@@ -24,13 +24,8 @@ namespace circt::cosimGen {
 
 namespace {
 
-// Tags every module referenced along the given instance path (the extraction
-// target and its ancestor chain) with a module-level KEEP attribute, before any
-// optimization runs. This stops HWOptInterfaces' rewireModule (and
-// HWInlineTrivial) from dissolving the target/chain in the first opt pass -
-// which runs before hw-prop-ports-to-tlm has a chance to mark it - so the path
-// still resolves for extraction. hw-taint releases the module-level KEEP again
-// once extraction is done, letting the second opt pass fold the target freely.
+// Tags every module along the instance path with a module-level KEEP attribute,
+// so the first opt pass keeps the path intact for extraction.
 struct HWKeepPathPass : impl::HWKeepPathBase<HWKeepPathPass> {
 public:
   using impl::HWKeepPathBase<HWKeepPathPass>::HWKeepPathBase;
