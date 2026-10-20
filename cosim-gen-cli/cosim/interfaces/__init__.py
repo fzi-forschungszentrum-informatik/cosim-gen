@@ -1,18 +1,6 @@
-"""What a component's ports *are*, by who's on the other end of them.
-
-One `interfaces` entry in cosim.json is one `Interface` subclass here, keyed by
-its `kind`. A subclass owns both ends of its kind: how it's spelled in
-cosim.json (`load`), what it contributes to the cosim-extract --port regex
-(`port_patterns`), and which extracted ports it claims (`resolve`). Each kind
-gets its own module - clock.py, reset.py, interrupt.py, gpio.py (both built on
-the shared wire.py base), bus.py (abstract) + tilelink.py (concrete) - so
-adding a kind (e.g. AXI) means adding one file, not editing this one. This
-module holds only what every kind shares: the `Interface` base, the kind
-registry, port-matching (`PortMatcher`), and the declaration-validation
-helpers.
-
-This sits below both config.py (which parses declarations) and codegen/ (which
-emits from resolved ones), so neither has to import the other."""
+"""Interface kinds: how a cosim.json `interfaces` entry is loaded (`load`), which
+ports it extracts (`port_patterns`) and which extracted ports it claims (`resolve`).
+Each kind lives in its own module."""
 
 from __future__ import annotations
 
@@ -22,8 +10,7 @@ from typing import ClassVar
 
 from ..statejson import StateInfo, StateType, removeIo
 
-# kind string -> Interface subclass. Populated by __init_subclass__, so adding
-# a kind is adding a class - there is no second table to keep in sync.
+# Filled by Interface.__init_subclass__.
 INTERFACE_KINDS: dict[str, type[Interface]] = {}
 
 
@@ -34,18 +21,15 @@ class BusDir(Enum):
 
 @dataclass
 class BusSignal:
-    """One wire of a bus protocol bundle. `names` are the accepted suffixes
-    under the bus prefix, most-preferred first (FIRRTL emits either
-    `_a_opcode` or `_a_bits_opcode` depending on how the bundle was flattened);
-    `names[0]` is also the canonical key the codegen looks the signal up by."""
+    """One wire of a bus bundle. `names` are the accepted suffixes under the bus
+    prefix, most preferred first; `names[0]` is the codegen's key for it."""
     typ: StateType
     optional: bool
     names: list[str]
 
 
 def flip_signals(sig: list[BusSignal]) -> list[BusSignal]:
-    """The same bundle seen from the other side: every input becomes an output
-    and vice versa. A master port list is a slave's, flipped."""
+    """The bundle seen from the other side: inputs and outputs swapped."""
     def flip(t: StateType) -> StateType:
         assert t in (StateType.INPUT, StateType.OUTPUT)
         return StateType.INPUT if t == StateType.OUTPUT else StateType.OUTPUT
@@ -55,37 +39,17 @@ def flip_signals(sig: list[BusSignal]) -> list[BusSignal]:
 class PortMatcher:
     """Claims extracted ports for declared interfaces.
 
-    cosim-extract's port-hoisting (HWPropPorts2TLM) keeps the original
-    instance hierarchy as a literal "."-joined prefix on every extracted port
-    ("uart_0.clock", or a deeper "topMod.dmx512_0.clock", trimmed to at most
-    two segments) - it isn't stripped just because the module got renamed to
-    "<type>_TOP", and its depth varies per peripheral. Declared names are the
-    bare port name as it appears in the peripheral's own FIRRTL ("clock",
-    "auto_control_xing_in"), so this strips the common instance prefix rather
-    than making every cosim.json author repeat it. A bus/irq/gpio name's own
-    internal leaf suffixes (an interrupt's "_sync_0..N", a bus's "_a_valid")
-    are still "_"-joined, since those come from FIRRTL bundle flattening, not
-    instance hoisting - only the instance-boundary separator is "."; ports
-    that already have no instance prefix (a passthrough port lifted straight
-    to the boundary, e.g. "uart0_txd") keep their full name.
-
-    Matching never consumes; the caller consumes after a *successful* resolve,
-    so a failed match leaves the pool untouched and can simply be skipped."""
+    Declared names are bare port names; extracted ports may carry an instance prefix
+    ("uart_0.clock"), which is derived from the clock and tried as well. Matching
+    never consumes; callers consume after a successful resolve."""
 
     def __init__(self, io: list[StateInfo], anchor: str):
         self._io = list(io)
         self._prefix = self._derive_prefix(anchor)
 
     def _derive_prefix(self, anchor: str) -> str:
-        """Derive the instance prefix from the one unambiguous anchor: the
-        clock port is always "<prefix><clock name>", so whatever precedes the
-        declared clock name on the actual clock port is the prefix every other
-        real interface port carries too. Handles prefixes of any depth
-        ("uart_0." vs "topMod.dmx512_0.") without guessing. The instance
-        boundary is joined with "." (HWPropPorts2TLM's hoisting), but "_" is
-        checked too since a passthrough/non-hoisted port may still carry an
-        underscore-joined prefix - whichever separator the actual port uses
-        wins, so callers never need to know which one applies."""
+        """The instance prefix in front of `anchor` (the clock name) on its port, with
+        its "." or "_" separator; "" if there is none."""
         if not anchor:
             return ""
         for io in self._io:
@@ -100,10 +64,8 @@ class PortMatcher:
         return (name, f"{self._prefix}{name}")
 
     def match(self, name: str, *, exact: bool) -> list[StateInfo]:
-        """Ports for a declared name, tried both bare and under the common
-        instance prefix. `exact` restricts to a single exactly-named port
-        (clock/reset); otherwise a name is a prefix matching its leaf ports
-        (an interrupt's `_sync_0..N`, a gpio bundle's `_pins_*`)."""
+        """Ports for a declared name, bare or under the instance prefix. `exact` matches
+        one whole port name; otherwise the name is a prefix of its leaf ports."""
         for cand in self.candidates(name):
             hits = [io for io in self._io
                     if io.name == cand or (not exact and io.name.startswith(cand + "_"))]
@@ -112,8 +74,7 @@ class PortMatcher:
         raise ValueError(f"declared signal {name!r} not found among the extracted ports")
 
     def resolve_prefix(self, name: str) -> str:
-        """The bus prefix as the extracted ports actually spell it - bare or
-        instance-qualified, whichever some port carries."""
+        """The bus prefix as the extracted ports spell it."""
         return next((c for c in self.candidates(name)
                      if any(io.name.startswith(c + "_") for io in self._io)), name)
 
@@ -129,8 +90,7 @@ class PortMatcher:
 
 
 def _one_of_prefix_or_name(cls, d: dict, where: str) -> tuple[str, bool]:
-    """cosim.json spells a name-matched interface with 'name' and a
-    prefix-matched one with 'prefix'; exactly one is required."""
+    """(value, is_name) from exactly one of 'name' or 'prefix'."""
     has_prefix, has_name = "prefix" in d, "name" in d
     if has_prefix == has_name:
         raise ValueError(
@@ -140,10 +100,6 @@ def _one_of_prefix_or_name(cls, d: dict, where: str) -> tuple[str, bool]:
 
 
 def _require_name(cls, d: dict, where: str) -> str:
-    # 'prefix' is deliberately absent from a name-only kind's KEYS (clock,
-    # reset), so a declaration using it is already caught by
-    # _reject_unknown_keys before this runs - a clock/reset is always a
-    # single exact port, never a prefix, so there's no case to special-case.
     if "name" not in d:
         raise ValueError(f"cosim.json: {where}: {cls.KIND} interface missing 'name': {d}")
     return d["name"]
@@ -160,21 +116,11 @@ def _reject_unknown_keys(cls, d: dict, known: tuple, where: str) -> None:
 
 @dataclass
 class Interface:
-    """One entry of a component's `interfaces` list.
-
-    A declaration carries no ports; `resolve` returns a *new* instance with
-    them filled in. It never populates in place, because project.py resolves
-    the same Component against a model more than once per run (the build
-    manifest, the dts overlay, and the run precheck each do), and because the
-    resolved StateInfo objects are the model's own - shared, not copied, since
-    codegen/main.py renames some of them after the fact."""
+    """One entry of a component's `interfaces` list. `resolve` returns a new instance
+    with `ports` filled in."""
 
     KIND:       ClassVar[str]  = ""     # cosim.json "kind"; "" = abstract, unregistered
-    # Regex/resolution priority. Emission is ordered by kind, not by declaration
-    # order, so a prefix-matched gpio can't steal a bus's leaf ports just
-    # because it was listed first; order *within* a kind is the declaration's
-    # and is load-bearing (bus order <-> dts reg windows, interrupt order <->
-    # dts interrupt cells and wire indices).
+    # Resolution order across kinds; within a kind, declaration order is kept.
     ORDER:      ClassVar[int]  = 0
     EXACT:      ClassVar[bool] = False  # name is a whole port name, not a prefix
     NEEDS_QEMU: ClassVar[bool] = False  # talks to QEMU at all
@@ -202,17 +148,14 @@ class Interface:
         return replace(self, ports=m.match(self.name, exact=self.EXACT))
 
 
-# Each import below both registers its kind(s) into INTERFACE_KINDS (via
-# Interface.__init_subclass__) and re-exports the class, so `from ..interfaces
-# import *` (config.py, codegen/typedio.py) keeps seeing every concrete kind
-# without listing them here by hand.
-from .clock import ClockInterface  # noqa: E402 - after Interface, which they subclass
-from .reset import ResetInterface  # noqa: E402
-from .wire import _WireInterface  # noqa: E402
-from .interrupt import IrqInterface  # noqa: E402
-from .gpio import GpioInterface  # noqa: E402
+# Registers every kind and re-exports it; `X as X` marks the re-export for ruff.
 from .bus import BusInterface
-from .tilelink import TileLinkBus  # noqa: E402,F401 - imported for its registration
+from .clock import ClockInterface as ClockInterface
+from .gpio import GpioInterface as GpioInterface
+from .interrupt import IrqInterface as IrqInterface
+from .reset import ResetInterface as ResetInterface
+from .tilelink import TileLinkBus as TileLinkBus
+from .wire import _WireInterface as _WireInterface
 
 
 def known_kinds() -> str:
@@ -224,7 +167,6 @@ def bus_kinds() -> list[type[BusInterface]]:
 
 
 def load_interface(d, where: str) -> Interface:
-    """One `interfaces` entry -> its Interface subclass, by 'kind'."""
     if not isinstance(d, dict):
         raise TypeError(f"cosim.json: {where}: every 'interfaces' entry must be an "
                          f"object, got {d!r}")

@@ -26,6 +26,10 @@ include = ["cosim*"]
 [tool.setuptools.package-data]
 cosim = ["codegen/templates/*.j2"]
 
+# Same first-party classification whether ruff runs from here or the repo root.
+[tool.ruff.lint.isort]
+known-first-party = ["cosim"]
+
 # mk/, include/, live alongside this pyproject.toml (not inside the
 # cosim/ package) and are located at runtime relative to the repo checkout
 # (see cosim/paths.py) - install with `../.venv/bin/pip install -e .` (the venv

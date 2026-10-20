@@ -18,10 +18,13 @@ _INIT_TEMPLATE = """{{
   "qemu": {{
     "elfs": ["bootrom.elf", "simram.elf"]
   }},
+  "sync_quantum": 1000,
+  "max_cycles": 0,
+  "trace": false,
   "components": [
     {{
-      "type": "MyPeripheral",
-      "path": "topDesign/topMod/myPeripheral",
+      "type": "TLUART",
+      "path": "topDesign/topMod/uart_0",
       "compat": "sifive,uart0",
       "interfaces": [
         {{ "kind": "clock", "name": "clock", "freq_mhz": 150 }},
@@ -45,7 +48,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     config_path.write_text(_INIT_TEMPLATE.format(backend=args.backend))
     print(f"Created {config_path}")
     print(
-        "Edit it to point at your design, dts, mapping, and components, then run 'cosim build'."
+        "Edit it to point at your design, dts and components, then run 'cosim doctor' and 'cosim build'."
     )
     return 0
 
@@ -86,10 +89,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"  {'(whole design)':<24} rtl-only (cosim run rtl)")
         return 0
 
-    # 'rtl' is a reserved leading token, not a component name: `cosim run rtl
-    # [COMPONENT]` runs standalone, no QEMU. Anything else - zero or more
-    # component names, or none at all - couples QEMU to exactly those (or to
-    # nothing, for a plain boot).
+    # `cosim run rtl [COMPONENT]` runs without QEMU; other args name the components to couple.
     if args.args and args.args[0] == "rtl":
         if args.all:
             raise RuntimeError(
@@ -140,7 +140,7 @@ def build_parser() -> argparse.ArgumentParser:
         "dir", nargs="?", default=".", help="Directory to scaffold into (default: cwd)"
     )
     init.add_argument(
-        "--backend", choices=["arcilator", "verilator"], default="arcilator"
+        "--backend", choices=["arcilator", "verilator"], default="verilator"
     )
     init.add_argument(
         "-f", "--force", action="store_true", help="Overwrite an existing cosim.json"
@@ -236,10 +236,8 @@ def build_parser() -> argparse.ArgumentParser:
     clean.add_argument(
         "--all",
         action="store_true",
-        help="Also remove each component's scaffolded Makefile, sim.cpp, and any hand-added "
-        "sources (e.g. periph.cpp) - by default those survive `cosim clean` since they "
-        "may be hand-edited; only the machine-owned config.mk and nested build/ artifacts "
-        "are removed.",
+        help="Remove the whole build directory, including each unit's sim.cpp and any "
+        "hand-added sources, which `cosim clean` otherwise keeps.",
     )
     clean.set_defaults(func=cmd_clean)
 
@@ -263,6 +261,8 @@ def main() -> None:
     except (
         RuntimeError,
         ValueError,
+        TypeError,
+        AttributeError,
         FileNotFoundError,
         KeyError,
         subprocess.CalledProcessError,

@@ -5,9 +5,8 @@ Generate and run a QEMU↔RTL co-simulation from a single declarative `cosim.jso
 Point it at a design (`.fir`/`.hw.mlir`), a device tree, and a list of components to
 extract, and `cosim build` produces one `sim` binary **per component** — each an
 independent SystemC model, each with its own remote-port channel to QEMU, each its own
-**standalone, editable mini-project** under `build/components/<name>/` (its own
-`Makefile` you can hand-edit — add a peripheral model, extra flags — that survives every
-future `cosim build`; see [How `cosim build` works](#how-cosim-build-works)).
+**standalone mini-project** under `build/components/<name>/`, generated from
+`cosim.json` (see [How `cosim build` works](#how-cosim-build-works)).
 `cosim run` boots QEMU on its own; name components to couple them to it (each its own
 remote-port socket), or `cosim run rtl [COMPONENT]` to run one standalone with no QEMU
 at all.
@@ -61,6 +60,13 @@ QEMU coupling to actually exercise them.
   "sync_quantum": 1000,
   "max_cycles": 0,
   "extra_args": ["+foo=1"],
+  "trace": false,
+  "sysc_trace": false,
+  "coverage": false,
+  "cxxflags": ["-DFOO"],
+  "ldlibs": [],
+  "verilator_args": ["--threads", "2"],
+  "arcilator_args": [],
   "soc_rtl": {
     "extra_files": ["bootrom.mem", "simram.mem"],
     "interfaces": [
@@ -77,7 +83,9 @@ QEMU coupling to actually exercise them.
         { "kind": "tilelink", "prefix": "auto_control_xing_in", "dir": "slave" },
         { "kind": "interrupt", "prefix": "auto_int_xing_out", "dir": "out" }
       ],
-      "extra_args": ["+tx_uart=1"] }
+      "extra_args": ["+tx_uart=1"],
+      "trace": true,
+      "user_sim_cpp": false }
   ],
   "toolchain": {
     "firtool": "/opt/firtool/bin/firtool",
@@ -86,19 +94,17 @@ QEMU coupling to actually exercise them.
 }
 ```
 
-Only `design.input` and `design.supported_backends` are required; everything else is
+Only `design.input` is required; everything else is
 optional and defaults to "whole design, no QEMU coupling."
 
 ### `design`
 
 - **`input`** (required) — `.fir`, or `.hw.mlir`/`.mlir` to skip the firtool lowering
   step entirely (the file is used as-is).
-- **`supported_backends`** (required) — a non-empty list of `"arcilator"`/`"verilator"`,
-  the backend(s) *this design* actually lowers on. `cosim build` builds a unit for every
-  one listed; `cosim run --backend` picks which built variant to execute (default: the
-  first one listed). No default value on purpose — some designs only lower on one backend
-  (e.g. async-reset registers arcilator can't lower), so this isn't safe to guess at. See
-  [Backend vs. run mode](#backend-vs-run-mode).
+- **`supported_backends`** — a non-empty list of `"arcilator"`/`"verilator"`, default
+  `["verilator"]`: the backend(s) *this design* lowers on. `cosim build` builds a unit for
+  every one listed; `cosim run --backend` picks which built variant to execute (default: the
+  first one listed). See [Backend vs. run mode](#backend-vs-run-mode).
 - **`dts`** — base platform device tree. Only needed to generate the QEMU overlay
   (`qemu`/`cosim` run modes); a design with no bus/interrupt IO can be built and run in
   `rtl` mode without it. The QEMU-side dts mapping lives on the owning component's own
@@ -117,12 +123,6 @@ optional and defaults to "whole design, no QEMU coupling."
 - **`extra_args`** — extra arguments appended verbatim to every `qemu`
   invocation (plain boot and coupled) — an escape hatch for QEMU flags `cosim` has no
   dedicated knob for.
-
-Both only seed `build/qemu/Makefile`'s `ELFS`/`QEMU_ARGS` the first time `cosim build`
-scaffolds it (see [How `cosim build` works](#how-cosim-build-works)) — `cosim run` always
-shells out to that Makefile's `run-qemu`/`run-qemu-coupled` targets (`mk/qemu.mk`), so
-editing them there afterwards takes effect without a `cosim.json` change or a rebuild,
-the same way a component's own `Makefile` hooks do.
 
 ### Top-level build/run defaults
 
@@ -145,6 +145,16 @@ every build unit, not scoped to any one section:
   after the positional sync_quantum/max_cycles slots. Read by verilator's plusargs
   scanning regardless of position; silently ignored by the arcilator backend. A
   component's own `extra_args` overrides this for that component.
+- **`trace`** — `true` enables the backend's internal-signal tracer: verilator's VCD
+  tracer (`verilator_sysc_native.vcd`) or arcilator's (`arcilator.vcd`).
+- **`sysc_trace`** — `true` writes a VCD of `Top`'s ports (`{verilator,arcilator}_sysc.vcd`).
+- **`coverage`** — `true` enables verilator line/toggle coverage (`coverage.dat`).
+- **`cxxflags`**, **`ldlibs`** — extra compile/link flags for the `sim` binary.
+- **`verilator_args`**, **`arcilator_args`** — extra flags for verilator/arcilator,
+  added to the built-in ones.
+
+A component (or `soc_rtl`) can override each of them for itself. All of them are written
+into the unit Makefiles on every `cosim build`.
 
 ### `soc_rtl`
 
@@ -246,9 +256,13 @@ other end of each wire — one entry per interface, each tagged with its own `"k
 - **`sync_quantum`**, **`max_cycles`**, **`extra_args`** — all optional, all override
   the matching top-level field (see
   [Top-level build/run defaults](#top-level-buildrun-defaults)) for this component only
-  (omit to inherit the top-level default). **`extra_files`** is also optional but
+  (omit to inherit the top-level default), as do **`trace`**, **`sysc_trace`**,
+  **`coverage`**, **`cxxflags`**, **`ldlibs`**, **`verilator_args`** and
+  **`arcilator_args`**. **`extra_files`** is also optional but
   **additive**, not overriding — see
   [`soc_rtl.extra_files`](#soc_rtl) above.
+- **`user_sim_cpp`** — `true` keeps `cosim build` from generating this unit's `sim.cpp`,
+  so you can maintain your own.
 
 **Names are the bare port name from the peripheral's own FIRRTL** — you do *not* prefix
 them with the instance hierarchy (`uart_0.`, `topMod.dmx512_0.`, …) that `cosim-extract`
@@ -314,7 +328,7 @@ resolution order below.
 ## CLI reference
 
 - **`cosim init [dir] [--backend arcilator|verilator] [-f]`** — scaffold a starter
-  `cosim.json` in `dir` (default: cwd).
+  `cosim.json` in `dir` (default: cwd) for one backend (default: verilator).
 - **`cosim gen-config <diplomacy.json> [-o cosim.json] [--dts board.dts]`** — derive a
   structured `components` list from a design's `*.diplomacy.json` config (one entry per
   labeled module, classifying its `interfaces` - clock/reset/bus/interrupt - from the
@@ -351,8 +365,8 @@ resolution order below.
     the whole design's own `sim`; one component name (at most one) runs that extracted
     component's own sim instead. Run it again yourself for another target - the tool
     doesn't orchestrate multiple `rtl` runs together.
-  - `-j N` — `make -jN` when regenerating the dtb (default: top-level `jobs`, or all
-    CPUs). Doesn't affect the spawned `sim` binaries themselves.
+  - `-j N` — `make -jN` for `rtl` runs (default: top-level `jobs`, or all CPUs). Doesn't
+    affect the spawned `sim` binaries themselves.
   - `-l`/`--list` — print the component names declared in `cosim.json` (each tagged
     `qemu-coupled` or `rtl-only`, with the exact `cosim run` invocation for it, plus its
     `type` in brackets), then exit without running anything. Mutually exclusive with
@@ -374,19 +388,18 @@ resolution order below.
     run-coupled` (below) write to for the same binary, so there's one canonical log per
     component-backend pair regardless of which entry point ran it.
 - **`cosim clean [-C cosim.json] [--all]`** — remove build artifacts: each unit's
-  `config.mk`, `overlay.dts`, and nested `build/` (the compiled outputs), plus the shared
-  top-level ones (`design.hw.mlir`, `systemctlm/`, the top `Makefile`, dtb). **Preserves** every
-  unit's own scaffolded `Makefile`, its `sim.cpp`, and any hand-added sources (e.g.
-  `periph.cpp`) - those are yours, not `cosim build`'s. Pass `--all` to also wipe those
-  (loses hand edits) - equivalent to `rm -rf build`.
+  `Makefile`, `config.mk`, `overlay.dts`, and nested `build-<backend>/` (the compiled outputs), plus the shared
+  top-level ones (`design.hw.mlir`, `systemctlm/`, the Makefiles, dtb). **Preserves** every
+  unit's `sim.cpp` and any hand-added sources (e.g. `periph.cpp`). Pass `--all` to also
+  wipe those - equivalent to `rm -rf build`.
 - **`cosim doctor [-C cosim.json]`** — print resolved toolchain paths and flag anything
   missing.
 
 ## How `cosim build` works
 
-Each component (and the whole design, as a pseudo-component) is a **standalone, editable
+Each component (and the whole design, as a pseudo-component) is a **standalone
 mini-project** under its own `build/components/<name>/` - one directory shared by every
-backend in `design.supported_backends`: the editable/generated top-level files
+backend in `design.supported_backends`: the generated top-level files
 (`Makefile`, `config.mk`, `sim.cpp`, and - only when `arcilator` is supported -
 `gen-arc-<name>.cpp`/`.h`/`A<Model>.h`) don't depend on which backend built them (`sim.cpp`
 picks its backend via `#ifdef USE_ARCILATOR`/`USE_VERILATOR` at compile time - see
@@ -401,13 +414,12 @@ build/
   design.hw.mlir               # shared, built once
   systemctlm/libsystemctlm.a   # shared, built once
   qemu/
-    Makefile                    # scaffolded ONCE - yours to edit (ELFS/QEMU_ARGS), never overwritten again
-    config.mk                   # regenerated every `cosim build` - do not edit
+    Makefile                    # regenerated every `cosim build` from cosim.json - do not edit
   components/
     uart_0/                      # instance name of the TLUART component (path's last segment)
-      Makefile                 # scaffolded ONCE - yours to edit, never overwritten again
+      Makefile                 # regenerated every `cosim build` from cosim.json - do not edit
       config.mk                # regenerated every `cosim build` - do not edit
-      sim.cpp                  # generated once, shared across backends (unless you set GENERATE_SIM_CPP := 0)
+      sim.cpp                  # generated once, shared across backends (unless "user_sim_cpp": true)
       periph.cpp                # (optional) your own SystemC peripheral model
       overlay.dts                # QEMU overlay fragment - also shared, backend-independent
       build-verilator/           # only populated if "verilator" is in design.supported_backends
@@ -431,52 +443,12 @@ separate, run-time-only `BACKEND` variable (defaulting to the first supported on
 which one `make run`/`run-coupled`/`sim` executes - exactly the mechanism `cosim run
 --backend` drives underneath (`make -C components/<name> run BACKEND=<selected>`).
 
-**Editing a component.** Its `Makefile` is created once and is yours from then on -
-`cosim build` never overwrites or deletes it again (only `cosim clean --all` does). It
-`include`s the regenerated `config.mk` (tool paths, `--path`/`--port`, backend - anything
-that comes from `cosim.json`) plus your own hook variables:
-
-- **`EXTRA_SRCS`** — extra `.cpp` files (e.g. your own `periph.cpp`) compiled and linked
-  into `sim`. The generated `sim.cpp` calls a weak `cosim_user_wire(Top&)` hook once,
-  right where it lists the undeclared "connect your own SystemC model" ports (`Top`'s
-  members are public) - define a strong `void cosim_user_wire(Top &top) { ... }` in your
-  `EXTRA_SRCS` file to bind them; the weak no-op default is used if you don't.
-- **`EXTRA_CXXFLAGS`**, **`EXTRA_LDLIBS`** — extra compile/link flags.
-- **`SYNC_QUANTUM`**, **`RUN_ARGS`** — used by `make run`/`make run-coupled` (below);
-  seeded once from `cosim.json`'s top-level/component `sync_quantum` when the unit's
-  Makefile is first scaffolded, then a plain hand-editable `?=` default afterwards.
-- **`GENERATE_SIM_CPP`** — set to `0` to hand-own `sim.cpp` entirely (stops regeneration).
-- Tracing — three **independent, combinable** knobs, not one choice:
-  - **`VM_TRACE_VCD`**/**`VM_TRACE_FST`** — set to `1` for verilator's own *native* tracer,
-    with full internal RTL signal visibility (hooked directly onto the verilated
-    submodule, not just `Top`'s own ports). `verilator` backend only; mutually exclusive
-    with each other (VCD wins if both are `1`); a build-time `#error` under `arcilator`
-    (no native tracer there to pick a format from). Setting either also passes
-    `--trace-vcd`/`--trace-fst` to verilator itself (a compile-time define alone doesn't
-    instrument the model - verilator needs to know at *verilate* time), and uses its
-    native `VerilatedVcdSc`/`VerilatedFstSc` SystemC integration. Output:
-    `verilator_sysc_native.{vcd,fst}`.
-  - **`ARC_TRACE`** — set to `1` to enable arcilator's own separate internal tracer.
-    `arcilator` backend only; its own file output, handled entirely inside the generated
-    `A<Model>` wrapper.
-  - **`SYSC_TRACE`** — set to `1` for a generic SystemC `sc_trace_file` VCD of `Top`'s own
-    declared ports (every clock/reset/interrupt/gpio/other/bus signal - see the generated
-    `Top::trace()`) - a boundary-level view, not internal RTL state. Works identically for
-    either backend, and independently of the knobs above - e.g. `VM_TRACE_VCD=1
-    SYSC_TRACE=1` together gives you both an internal-signals VCD *and* a boundary-only
-    VCD, in separate files. Output: `{verilator,arcilator}_sysc.vcd`.
-  - **`VM_COVERAGE`** — set to `1` for verilator's own line/toggle coverage collection.
-    `verilator` backend only; independent of and combinable with everything above (like
-    the trace knobs, also passes `--coverage` to verilator itself at verilate time - a
-    compile-time define alone isn't enough to instrument the model). Output: `coverage.dat`
-    (`verilator_coverage -write-info coverage.dat.info -annotate <dir> coverage.dat` turns
-    that into an annotated-source report).
-
-All five default to `0` in both `mk/component.mk` and the scaffolded per-component
-`Makefile` - set them there (survives future `cosim build`s) or one-off on the command
-line, e.g. `cosim build` doesn't take a tracing flag itself, so `make -C
-build/components/uart_0 VM_TRACE_VCD=1` (or edit the component's own `Makefile`) is how
-you turn tracing on.
+**Unit settings.** Each unit's `Makefile` and `build/qemu/Makefile` are regenerated by
+every `cosim build` from `cosim.json` (see
+[Top-level build/run defaults](#top-level-buildrun-defaults)); don't edit them. The
+generated `sim.cpp` calls a weak `cosim_user_wire(Top&)` hook where it lists the undeclared
+ports; a strong definition in your own source binds them. For a one-off run, override a
+variable on the command line, e.g. `make -C build/components/uart_0 TRACE=1`.
 
 Each component dir is also independently buildable: `cd build/components/uart_0 && make`
 builds just that one; `make run` runs its `sim` standalone (only meaningful for a
@@ -484,7 +456,7 @@ component with no bus/interrupt/gpio IO, e.g. the whole design or a bus-less com
 one that *does* have such IO expects a QEMU remote-port socket as its first argument
 instead of a cycle count, so use `cosim run <name>` for those); `make run-coupled`
 runs it against a QEMU peer you've already started yourself. Both tee the sim binary's
-combined stdout/stderr to `build/run.log` (like `cosim run` does), in addition to the
+combined stdout/stderr to `build-<backend>/run.log` (like `cosim run` does), in addition to the
 terminal.
 
 The steps in each unit's own build:
@@ -505,8 +477,7 @@ The steps in each unit's own build:
    template (`codegen/templates/`): one SystemC `Top` wrapping just that one model, its
    own `QemuTLM` if it has bus/interrupt/gpio IO, buses wired through the
    registry-selected TLM bridge, interrupts+gpio wired to the remote-port wire channel,
-   and any undeclared ports left as user-model connection points (see `EXTRA_SRCS`
-   above). Links its own `build/sim` - components are never assembled into one shared
+   and any undeclared ports left as user-model connection points. Links its own `build/sim` - components are never assembled into one shared
    binary. Classifies each port from the matching `components[]` declaration
    (`--component <name>`) or, for the whole design, `soc_rtl` if declared (`--soc-rtl`) -
    otherwise it falls back to guessing clock/reset by name suffix.

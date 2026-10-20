@@ -1,30 +1,18 @@
 #!/usr/bin/env python3
-"""Classify a model's extracted ports into typed IO, either from a cosim.json
-`interfaces` declaration or - with no declaration - by guessing from name
-patterns and feeding the guesses through the same resolve path.
-
-Backend-agnostic: both the arcilator and verilator paths render sim.cpp from
-the TypedIO built here. `from .typedio import *` also re-exports statejson's
-and interfaces' names, which the rest of codegen/ relies on."""
-from dataclasses import dataclass, field
+"""Classifies a model's extracted ports into typed IO, from a cosim.json
+declaration or by name patterns."""
+from dataclasses import dataclass
 from typing import *
 
-from ..statejson import *      # noqa: F401,F403 - re-exported for `from .typedio import *`
-from ..interfaces import *     # noqa: F401,F403
+from ..interfaces import *
 from ..interfaces.bus import BusInterface
-from ..interfaces.tilelink import TileLinkBus
+from ..statejson import *
 
 
 @dataclass
 class TypedIO:
-    """A resolved component's IO: one flat list of interfaces that claimed
-    ports, plus whatever they left over.
-
-    The kind buckets below are views, not storage - the interfaces are the
-    storage. `other` is what cosim-extract kept as plain passthrough ports
-    because nothing in the component's io_regex matched them (a uart's
-    txd/rxd): they need no declaration, they're connection points for a
-    user-supplied SystemC model, not something this tool wires to QEMU."""
+    """A resolved component's IO: the interfaces that claimed ports, and the
+    leftover passthrough ports (`other`)."""
 
     interfaces: List[Interface]
     other: List[StateInfo]
@@ -54,9 +42,6 @@ class TypedIO:
     def getSignals(self, clock=False, buses=False):
         r = []
         if clock:
-            # Copy, not alias - `r += ...` below is an in-place list.__iadd__
-            # and would otherwise mutate the freshly-built clocks list only by
-            # accident; keep it explicit.
             r = list(self.clocks)
         r += self.resets + self.intrs + self.gpio + self.other
         if buses:
@@ -65,10 +50,7 @@ class TypedIO:
 
     @property
     def needs_qemu(self) -> bool:
-        """Whether this component has any IO that talks to QEMU at all -
-        buses, interrupts (either direction), or gpio. A component with none
-        of these (e.g. a plain register/ALU) can only ever run standalone in
-        `rtl` mode - there's nothing for QEMU to couple to."""
+        """Whether any interface talks to QEMU (bus, interrupt or gpio)."""
         return any(i.NEEDS_QEMU for i in self.interfaces)
 
 
@@ -96,13 +78,8 @@ class ModelInfo:
 
 def resolve_interfaces(ifaces: List[Interface], matcher: PortMatcher,
                        *, strict: bool = True) -> TypedIO:
-    """Claim ports for each interface, in kind order (see Interface.ORDER).
-
-    strict=True (a cosim.json declaration): an interface that can't be
-    resolved is a config error. strict=False (the name-guessing fallback): a
-    candidate that doesn't pan out simply isn't an interface, and its ports
-    stay in the passthrough pool. resolve() consumes nothing itself, so a
-    failed attempt is atomic and can just be skipped."""
+    """Claims ports for each interface in Interface.ORDER. With `strict`, an
+    unresolvable interface raises; otherwise it is skipped."""
     resolved = []
     for iface in sorted(ifaces, key=lambda i: i.ORDER):
         try:
@@ -111,27 +88,20 @@ def resolve_interfaces(ifaces: List[Interface], matcher: PortMatcher,
             if strict:
                 raise
             continue
-        # A bus consumes its optional-signal placeholders too, which aren't in
-        # .ports (they matched no real port).
+        # A bus also consumes the placeholders of its absent optional signals.
         matcher.consume(r.io.values() if isinstance(r, BusInterface) else r.ports)
         resolved.append(r)
     return TypedIO(resolved, matcher.leftovers)
 
 
 def build_typedIO(decl, ioIn: List[StateInfo]) -> TypedIO:
-    """Classify extracted ports from the cosim.json component *declaration*."""
     return resolve_interfaces(decl.interfaces,
                               PortMatcher(ioIn, decl.clock.name), strict=True)
 
 
 def infer_interfaces(io: List[StateInfo]) -> List[Interface]:
-    """No cosim.json declaration to classify from (the whole design with no
-    'soc_rtl'): guess interfaces from name patterns, to be fed through the
-    exact same resolve path a declaration takes.
-
-    Guesses come off a shrinking pool so the precedence matches the order
-    below - a port already claimed as a clock can't also look like an
-    interrupt."""
+    """Interfaces guessed from port names; a port claimed by one guess isn't
+    offered to the next."""
     CLOCK_NAMES = ("clock", "clk")
     RESET_NAMES = ("reset", "rst")
 
@@ -153,10 +123,8 @@ def infer_interfaces(io: List[StateInfo]) -> List[Interface]:
                         name=s.name, exact=True,
                         dir="out" if s.typ == StateType.OUTPUT else "in"))
 
-    # One candidate per (bus class, direction, anchor port). Master before
-    # slave, matching the historical SUPPORTED_BUSSES order - bus list order
-    # drives the QemuTLM index spaces. A candidate that doesn't resolve is
-    # dropped by resolve_interfaces(strict=False).
+    # One candidate per bus kind, direction and anchor port; master first, since
+    # bus order sets the QemuTLM indices.
     for cls in bus_kinds():
         for dir in (BusDir.MASTER, BusDir.SLAVE):
             anchor = cls.SIGNALS[dir][0]

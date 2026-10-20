@@ -7,10 +7,7 @@
 {% endfor %}
 {% endif %}
 
-// One representative period, used only for the max_cycles run-length
-// scaling below - every declared clock (either backend, possibly several)
-// gets its own independent sc_clock straight from its own init_entries;
-// this macro isn't wired into any clock's actual period.
+// Only scales max_cycles; every clock has its own period.
 #define CLOCK_MHZ {{ ctx.anchor_freq_mhz }}
 
 #ifndef TRACE
@@ -50,10 +47,7 @@ typedef A{{ ctx.model.name }} {{ ctx.top_module }}_Wrapper;
 
 struct Top;
 {% if ctx.model.typedIO.other %}
-// Weak no-op default: define your own `void cosim_user_wire(Top&)` in an
-// EXTRA_SRCS file (see this component's Makefile) to bind the signals listed
-// below to your own SystemC peripheral model - the strong definition wins at
-// link time, so it's fine to add none at all.
+// Weak no-op default; define cosim_user_wire() to bind the signals listed below.
 void cosim_user_wire(Top &top) __attribute__((weak));
 void cosim_user_wire(Top &top) { /* no user model connected */ }
 {% endif %}

@@ -25,7 +25,7 @@ class ClockInterface(Interface):
                 f"'freq_mhz' - every clock must declare its own, there's no project-wide "
                 f"default")
         if not isinstance(freq, int):
-            raise ValueError(
+            raise TypeError(
                 f"cosim.json: {where}: clock {d.get('name')!r} freq_mhz must be an "
                 f"integer, got {freq!r}")
         return cls(name=_require_name(cls, d, where), freq_mhz=freq)

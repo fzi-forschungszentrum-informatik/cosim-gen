@@ -1,12 +1,7 @@
 #!/usr/bin/env python3
-"""Arcilator-only: the model header/cpp pair (gen-arc-<name>.h/.cpp) describing
-one lowered model's state layout - the Signal/Hierarchy tables the arcilator
-runtime reads, and the View struct that maps named signals onto byte offsets
-in the model's flat state buffer.
-
-Verilator needs none of this; its own V<Top>.h already exposes the ports."""
-from .typedio import *
+"""Arcilator only: the gen-arc-<name>.h/.cpp describing a model's state layout."""
 from .format import *
+from .typedio import *
 
 
 def format_signal(state: StateInfo) -> str:

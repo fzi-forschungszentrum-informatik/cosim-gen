@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
-"""sim.cpp: the SystemC main() and Top module wrapping one extracted component
-- its clock/reset signals, its TLM bridges and the QemuTLM remote-port
-channel, and the bind() calls tying the model's ports to all of it.
-
-Backend-agnostic: the same sim.cpp drives an arcilator A<Model>.h wrapper or a
-verilator V<Top>.h, selected by the USE_ARCILATOR/USE_VERILATOR define."""
+"""Renders sim.cpp: sc_main and the Top module that wires one component's model
+to its clocks, resets, TLM bridges and QEMU remote-port channel, for either
+backend."""
 from dataclasses import dataclass, field
 
-from .typedio import *
 from .format import *
 from .jinja import env
+from .typedio import *
 
 
 @dataclass
@@ -50,14 +47,9 @@ class _RenderCtx:
     top_module: str
     inst: str            # SystemC instance/signal-name prefix for this component
     wrapper_path: str     # arcilator only; "" for verilator
-    # One representative clock period backing CLOCK_MHZ - only the
-    # max_cycles run-length scaling in sc_main needs a single value; every
-    # declared clock (either backend, possibly several) gets its own real
-    # period via its own init_entries entry below instead of using this macro.
+    # Backs CLOCK_MHZ, used only to scale max_cycles; each clock has its own period.
     anchor_freq_mhz: int
-    # How long (in us) to hold reset before releasing it - 1000 periods of
-    # the slowest declared clock, long enough that domain can't miss its
-    # first edge while reset is held.
+    # Reset hold time in us: 1000 periods of the slowest clock.
     reset_hold_us: float
     buses: list[_BusView]
     num_slave_buses: int
@@ -65,10 +57,7 @@ class _RenderCtx:
     wire_out: list[StateInfo]  # interrupt/gpio OUTPUT signals -> qemu.wire_in[]
     wire_in: list[StateInfo]   # interrupt/gpio INPUT signals  -> qemu.wire_out[]
     protocol_includes: list[str]  # headers pulled in by every bus's own bridge
-    # Which reset QEMU's own remote-port TLM reset line is wired to - the
-    # first bus's own reset (falling back the same way ctor_init's does), or
-    # the first declared reset if there are no buses at all (an
-    # interrupt/gpio-only component).
+    # Reset driven by QEMU's TLM reset line: the first bus's, else the first declared.
     qemu_reset_name: str = ""
     init_entries: list[str] = field(default_factory=list)
 
@@ -86,9 +75,7 @@ def _build_ctx(wrapper_path: str, model: "ModelInfo", top_module: str) -> _Rende
     num_slave = sum(1 for v in buses if v.bus.dir == BusDir.SLAVE)
     num_master = sum(1 for v in buses if v.bus.dir == BusDir.MASTER)
 
-    # Interrupts and gpio both talk to QEMU over the same remote-port wire
-    # pool (see dts_overlay.py) - combined here so the template can just
-    # index qemu.wire_in/out[] by position, no offset arithmetic needed.
+    # Interrupts and gpio share QEMU's wire pool, in this order.
     wire_out = [i for i in io.intrs if i.typ == StateType.OUTPUT] + [g for g in io.gpio if g.typ == StateType.OUTPUT]
     wire_in = [i for i in io.intrs if i.typ == StateType.INPUT] + [g for g in io.gpio if g.typ == StateType.INPUT]
 
@@ -98,9 +85,6 @@ def _build_ctx(wrapper_path: str, model: "ModelInfo", top_module: str) -> _Rende
             if inc not in includes:
                 includes.append(inc)
 
-    # Each clock's own resolved period - always its own declared freq_mhz, no
-    # project-wide fallback. clock_ifaces/clocks stay 1:1 (ClockInterface is
-    # EXACT=True, one port each), so zip() pairs each interface with its port.
     clock_mhz = [iface.freq_mhz for iface in io.clock_ifaces]
     if not clock_mhz:
         raise RuntimeError(f"{top_module}: has no clock - a component needs at least one")
@@ -109,13 +93,7 @@ def _build_ctx(wrapper_path: str, model: "ModelInfo", top_module: str) -> _Rende
         raise RuntimeError(
             f"{top_module}: clock(s) {zero_clocks!r} have no frequency set")
 
-    # A bus's own clock/reset (BusInterface.clock/.reset, see interfaces/bus.py)
-    # names a sibling interface by its *declared* cosim.json name (e.g.
-    # "gemac_gmii_tx_phyClk") - but the sim.cpp signal is named after the
-    # *resolved, extraction-prefixed* port (io.clocks[i].name, e.g.
-    # "uart_0_clock"), which can differ from the declared name. Map declared
-    # name -> resolved port name so a bus's override (or the first-declared
-    # fallback) both resolve to the right sim.cpp signal.
+    # Declared clock/reset name -> resolved port name, which may carry a prefix.
     clock_port_by_name = {iface.name: port.name for iface, port in zip(io.clock_ifaces, io.clocks)}
     reset_port_by_name = {iface.name: port.name for iface, port in zip(io.reset_ifaces, io.resets)}
 
@@ -125,9 +103,6 @@ def _build_ctx(wrapper_path: str, model: "ModelInfo", top_module: str) -> _Rende
     def _reset_port(declared_name: str | None) -> str:
         return reset_port_by_name[declared_name] if declared_name else io.resets[0].name
 
-    # The reset QEMU's own TLM reset line drives: the first bus's own reset
-    # (same fallback as its ctor_init below), or - a bus-less, interrupt/gpio-
-    # only component - the first declared reset.
     if buses:
         qemu_reset_name = _reset_port(buses[0].bus.reset)
     else:
@@ -152,8 +127,6 @@ def _build_ctx(wrapper_path: str, model: "ModelInfo", top_module: str) -> _Rende
     ]
     ctx.init_entries += [f'{inst}_{sig.name}("{inst}_{sig.name}")' for sig in io.resets]
     ctx.init_entries += [
-        # A bus's own clock/reset, when it names one - otherwise the first
-        # declared domain, matching every existing single-clock/reset component.
         v.bus.ctor_init(v.member,
                          f"{inst}_{_clock_port(v.bus.clock)}",
                          f"{inst}_{_reset_port(v.bus.reset)}")
@@ -164,8 +137,5 @@ def _build_ctx(wrapper_path: str, model: "ModelInfo", top_module: str) -> _Rende
 
 
 def gen_main(wrapper_path: str, model: "ModelInfo", top_module: str | None = None) -> str:
-    # Every sim binary wraps exactly one component now (see cosim-gen-cli/README.md:
-    # N components no longer share one Top/QemuTLM - each gets its own sim
-    # process and its own remote-port channel).
     ctx = _build_ctx(wrapper_path, model, top_module)
     return env().get_template("sim_cpp.j2").render(ctx=ctx)

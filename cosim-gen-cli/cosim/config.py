@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import copy
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
+from typing import ClassVar
 
 from .interfaces import (
     ClockInterface,
@@ -22,48 +24,104 @@ def _resolve(root: Path, value: str | None) -> Path | None:
     return p if p.is_absolute() else (root / p).resolve()
 
 
+def _section(d: dict, key: str) -> dict:
+    value = d.get(key, {})
+    if not isinstance(value, dict):
+        raise TypeError(f"cosim.json: {key} must be an object, got {value!r}")
+    return value
+
+
+def _int(d: dict, key: str, where: str) -> int:
+    value = d[key]
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise TypeError(f"cosim.json: {where}: {key} must be an integer, got {value!r}")
+    return value
+
+
+def _bool(d: dict, key: str, where: str) -> bool:
+    value = d[key]
+    if not isinstance(value, bool):
+        raise TypeError(f"cosim.json: {where}: {key} must be true or false, got {value!r}")
+    return value
+
+
+def _str_list(d: dict, key: str, where: str) -> list[str]:
+    value = d[key]
+    if not isinstance(value, list):
+        raise TypeError(f"cosim.json: {where}: {key} must be a list, got {value!r}")
+    return [str(v) for v in value]
+
+
+@dataclass(kw_only=True)
+class UnitSettings:
+    """Settings of a built unit, set at the top level and overridable per
+    component/soc_rtl. None means unset."""
+
+    # Cycles between a sim's remote-port syncs.
+    sync_quantum: int | None = None
+    # Clock cycles before a sim stops, 0 = unbounded.
+    max_cycles: int | None = None
+    extra_args: list[str] | None = None
+    trace: bool | None = None
+    sysc_trace: bool | None = None
+    coverage: bool | None = None
+    cxxflags: list[str] | None = None
+    ldlibs: list[str] | None = None
+    verilator_args: list[str] | None = None
+    arcilator_args: list[str] | None = None
+
+    DEFAULTS: ClassVar[dict] = {
+        "sync_quantum": 1000, "max_cycles": 0, "extra_args": [],
+        "trace": False, "sysc_trace": False, "coverage": False,
+        "cxxflags": [], "ldlibs": [], "verilator_args": [], "arcilator_args": [],
+    }
+
+    @staticmethod
+    def _load_settings(d: dict, where: str) -> dict:
+        parse = {int: _int, bool: _bool, list: _str_list}
+        return {
+            f.name: parse[type(UnitSettings.DEFAULTS[f.name])](d, f.name, where)
+            for f in fields(UnitSettings) if f.name in d
+        }
+
+    def settings_for(self, comp: UnitSettings | None) -> dict:
+        """Every setting, from `comp` where it sets one, else from self."""
+        return {
+            f.name: getattr(self, f.name) if comp is None or getattr(comp, f.name) is None
+            else getattr(comp, f.name)
+            for f in fields(UnitSettings)
+        }
+
+
+UNIT_SETTINGS = tuple(f.name for f in fields(UnitSettings))
+
+
 @dataclass
 class DesignConfig:
     input: Path
-    # dts is only needed to generate the QEMU device-tree overlay - a design
-    # with no bus/interrupt IO can be built and run in "rtl" mode without it.
-    # The QEMU-side dts binding lives on the owning component's own
-    # 'compat'/'dts_path' fields, not per-bus - see Component below.
+    # Only needed for the QEMU device tree.
     dts: Path | None = None
     seqmem: Path | None = None
     annotations: Path | None = None
-    # Every backend `cosim build` builds a unit for - `cosim run --backend`
-    # then picks which built variant to execute (default: the first one
-    # listed). Required, no default: which backends a design actually lowers
-    # on is a fact about *this design* (e.g. async-reset registers arcilator
-    # can't lower), not a build-tuning knob, and not something safe to guess.
+    # Backends `cosim build` builds; `cosim run` defaults to the first.
     supported_backends: list[str] = field(default_factory=list)
+
+    @property
+    def lowered(self) -> bool:
+        """Whether `input` is already hw-dialect MLIR, skipping firtool."""
+        return self.input.name.endswith(".mlir")
 
     @staticmethod
     def load(root: Path, d: dict) -> DesignConfig:
-        if "input" not in d:
-            raise ValueError("cosim.json: design.input is required")
-        if not d["input"]:
+        if not d.get("input"):
             raise ValueError("cosim.json: design.input must be a non-empty path")
-        if "supported_backends" not in d:
+        backends = d.get("supported_backends", ["verilator"])
+        if (not isinstance(backends, list) or not backends
+                or not set(backends) <= {"arcilator", "verilator"} or len(set(backends)) != len(backends)):
             raise ValueError(
-                "cosim.json: design.supported_backends is required - a list of the "
-                "backend(s) this design lowers on and `cosim build` builds, e.g. "
-                "[\"arcilator\"] or [\"verilator\"] - see cosim-gen-cli/README.md"
+                "cosim.json: design.supported_backends must be a non-empty list of distinct "
+                f"'arcilator'/'verilator', got {backends!r}"
             )
-        backends = d["supported_backends"]
-        if not isinstance(backends, list) or not backends:
-            raise ValueError(
-                f"cosim.json: design.supported_backends must be a non-empty list, got {backends!r}"
-            )
-        bad = [b for b in backends if b not in ("arcilator", "verilator")]
-        if bad:
-            raise ValueError(
-                f"cosim.json: design.supported_backends entries must be 'arcilator' or "
-                f"'verilator', got {bad!r}"
-            )
-        if len(set(backends)) != len(backends):
-            raise ValueError(f"cosim.json: design.supported_backends has duplicate entries: {backends!r}")
         return DesignConfig(
             input=_resolve(root, d["input"]),
             dts=_resolve(root, d.get("dts")),
@@ -75,19 +133,10 @@ class DesignConfig:
 
 @dataclass
 class QemuConfig:
-    # ELF files passed to QEMU via `-device loader`, in order (bootrom, test
-    # image, ...).
+    # ELF files passed to QEMU via `-device loader`, in order.
     elfs: list[Path] = field(default_factory=list)
-    # Extra args appended verbatim to every qemu invocation
-    # (plain boot and coupled) - an escape hatch for anything project.py
-    # doesn't otherwise expose a dedicated knob for.
     extra_args: list = field(default_factory=list)
-    # QEMU's own -sync-quantum for run-qemu-coupled: how often *QEMU itself*
-    # syncs with the coupled remote-port sim processes. Independent of any
-    # component's own sync_quantum (that governs how often each RTL sim
-    # syncs on its side, and can differ per component) - QEMU has one global
-    # knob, so this is its own setting, not derived from components. None
-    # falls back to the top-level Config.sync_quantum default.
+    # QEMU's -sync-quantum; None falls back to Config.sync_quantum.
     sync_quantum: int | None = None
 
     @staticmethod
@@ -99,11 +148,9 @@ class QemuConfig:
         )
 
 
-@dataclass
-class Component:
-    # Every port this component exposes, one entry per interface, each tagged
-    # with its own 'kind' - see cosim/interfaces/. Always non-empty: a clock
-    # is required (it's the anchor the instance prefix is derived from).
+@dataclass(kw_only=True)
+class Component(UnitSettings):
+    # Always contains a clock, from which the instance prefix is derived.
     interfaces: list[Interface] = field(default_factory=list)
     type: str | None = None
     path: str | None = None
@@ -112,9 +159,8 @@ class Component:
     compat: str | None = None
     dts_path: str | None = None
     extra_files: list[Path] = field(default_factory=list)
-    sync_quantum: int | None = None
-    max_cycles: int | None = None
-    extra_args: list[str] | None = None
+    # The unit's sim.cpp is user-maintained and never generated.
+    user_sim_cpp: bool = False
 
     @property
     def top_name(self) -> str:
@@ -122,11 +168,7 @@ class Component:
 
     @property
     def ordered_interfaces(self) -> list[Interface]:
-        """By kind (Interface.ORDER), not by declaration order - so a
-        prefix-matched gpio can't shadow a bus just because it was listed
-        first. Stable, so order *within* a kind stays the declaration's: bus
-        order lines up with the dts node's reg windows and the QemuTLM index
-        spaces, interrupt order with its interrupt cells and wire indices."""
+        """Interfaces by Interface.ORDER, keeping declaration order within a kind."""
         return sorted(self.interfaces, key=lambda i: i.ORDER)
 
     @property
@@ -143,22 +185,13 @@ class Component:
 
     @property
     def io_regex(self) -> str:
-        """The cosim-extract --port regex, derived from every declared signal
-        name - never hand-authored. clock/reset and any interrupt or gpio
-        declared via 'name' are exact single-port matches; buses (always) and
-        anything declared via 'prefix' expand to several leaf ports
-        post-extraction (a TileLink bus's `_a_valid`/`_a_bits_opcode`/..., a
-        bundled interrupt's `_sync_0..N` vector)."""
+        """The cosim-extract --port regex of all declared interfaces."""
         return "|".join(p for i in self.ordered_interfaces for p in i.port_patterns())
 
     @staticmethod
     def load(root: Path, d: dict, *, require_type_path: bool = True) -> Component:
-        """require_type_path=False is the top-level 'soc_rtl' declaration (the
-        whole, un-extracted design) rather than a components[] entry: no
-        type/path (nothing to extract), and only clock/reset interfaces plus
-        no compat/dts_path - there's no QEMU bus/interrupt coupling path for
-        the whole-design unit (build()'s QEMU-overlay detection, _gen_dtb, and
-        _run_coupled all only ever look at components[])."""
+        """`require_type_path=False` loads the top-level 'soc_rtl' declaration: no
+        type/path, only clock/reset interfaces, no compat/dts_path."""
         what = f"component {d.get('type')!r}" if require_type_path else "soc_rtl"
         if require_type_path:
             for key in ("type", "path"):
@@ -172,8 +205,7 @@ class Component:
 
         interfaces = [load_interface(i, what) for i in d["interfaces"]]
 
-        clocks = [i for i in interfaces if isinstance(i, ClockInterface)]
-        if len(clocks) < 1:
+        if not any(isinstance(i, ClockInterface) for i in interfaces):
             raise ValueError(
                 f"cosim.json: {what} needs at least one 'clock' interface (the first one "
                 "declared is the anchor every other port's instance prefix is derived "
@@ -200,11 +232,6 @@ class Component:
                     "design has no QEMU dts binding - see cosim-gen-cli/README.md")
 
         path = d.get("path", "")
-        # Last hierarchy segment of the instance path is the real instance
-        # name in the design (e.g. "topDesign/topMod/uart_0" -> "uart_0");
-        # falls back to `type` if there's no '/' to split on. Not computed at
-        # all for 'soc_rtl' (require_type_path=False) - it's never looked up
-        # by name.
         default_name = path.rsplit("/", 1)[-1] if path else d.get("type")
         name = d.get("name", default_name) if require_type_path else None
 
@@ -216,9 +243,8 @@ class Component:
             compat=d.get("compat"),
             dts_path=d.get("dts_path"),
             extra_files=[_resolve(root, f) for f in d.get("extra_files", [])],
-            sync_quantum=d.get("sync_quantum"),
-            max_cycles=d.get("max_cycles"),
-            extra_args=[str(a) for a in d["extra_args"]] if "extra_args" in d else None,
+            user_sim_cpp=_bool(d, "user_sim_cpp", what) if "user_sim_cpp" in d else False,
+            **UnitSettings._load_settings(d, what),
         )
 
 
@@ -240,74 +266,66 @@ class ToolchainConfig:
 
     @staticmethod
     def load(d: dict) -> ToolchainConfig:
-        known = {f.name for f in ToolchainConfig.__dataclass_fields__.values()}
+        known = {f.name for f in fields(ToolchainConfig)}
         unknown = set(d) - known
         if unknown:
             raise ValueError(f"cosim.json: unknown toolchain key(s): {sorted(unknown)}")
         return ToolchainConfig(**{k: d[k] for k in known if k in d})
 
 
-@dataclass
-class Config:
+@dataclass(kw_only=True)
+class Config(UnitSettings):
     root: Path
     design: DesignConfig
     qemu: QemuConfig
-    # make -jN for every generated Makefile invocation (design lowering,
-    # component extraction, systemctlm, link, dtb). None => os.cpu_count().
+    # make -j for every make call; None means os.cpu_count().
     jobs: str | None = None
-    # Cycles between each sim binary's remote-port sync point with QEMU -
-    # too low and QEMU spends most of its time context-switching to sync
-    # rather than running; too high and device timing gets coarse. A
-    # component's own sync_quantum overrides this for that component.
-    sync_quantum: int = 1000
-    # Stop each RTL model after this many clock cycles instead of running
-    # forever; 0 = unbounded. A component's own max_cycles overrides this
-    # for that component; `cosim run --cycles N` overrides both.
-    max_cycles: int = 0
-    # Extra argv strings appended to every spawned sim binary invocation,
-    # after the positional sync_quantum/max_cycles slots - read by
-    # verilator's plusargs scanning regardless of position, silently
-    # ignored by arcilator. A component's own extra_args overrides this
-    # for that component.
-    extra_args: list = field(default_factory=list)
-    # The whole, un-extracted design's own clock/reset/sync_quantum/
-    # max_cycles/extra_args/extra_files declaration - None if not given (the
-    # whole-design build then falls back to name-heuristic clock/reset
-    # detection and plain top-level defaults, same as before this field
-    # existed).
     soc_rtl: Component | None = None
     components: list[Component] = field(default_factory=list)
     toolchain: ToolchainConfig = field(default_factory=ToolchainConfig)
-    # Absolute path to the cosim.json this was loaded from - the codegen make
-    # recipe needs it to re-read the component declaration (--config), and it
-    # may not be named "cosim.json" (a -C override).
+    # The loaded cosim.json, which may have another name (-C).
     path: Path | None = None
+
+    TOP_LEVEL_KEYS: ClassVar[tuple[str, ...]] = (
+        "design", "qemu", "jobs", "soc_rtl", "components", "toolchain", *UNIT_SETTINGS,
+    )
 
     @staticmethod
     def load(path: Path) -> Config:
         path = Path(path).expanduser().resolve()
         with open(path) as f:
             d = json.load(f)
+        if not isinstance(d, dict):
+            raise TypeError(
+                f"cosim.json: top level must be a JSON object, "
+                f"got {type(d).__name__}"
+            )
+        unknown = set(d) - set(Config.TOP_LEVEL_KEYS)
+        if unknown:
+            raise ValueError(
+                f"cosim.json: unknown top-level key(s) {sorted(unknown)} - known: "
+                f"{', '.join(Config.TOP_LEVEL_KEYS)}"
+            )
+        if "components" in d and not isinstance(d["components"], list):
+            raise TypeError(
+                f"cosim.json: components must be a list, got {d['components']!r}"
+            )
 
         root = path.parent
         cfg = Config(
             root=root,
-            design=DesignConfig.load(root, d.get("design", {})),
-            qemu=QemuConfig.load(root, d.get("qemu", {})),
+            design=DesignConfig.load(root, _section(d, "design")),
+            qemu=QemuConfig.load(root, _section(d, "qemu")),
             jobs=d.get("jobs"),
-            sync_quantum=d.get("sync_quantum", 1000),
-            max_cycles=d.get("max_cycles", 0),
-            extra_args=[str(a) for a in d.get("extra_args", [])],
-            soc_rtl=Component.load(root, d["soc_rtl"], require_type_path=False) if "soc_rtl" in d else None,
+            soc_rtl=Component.load(root, _section(d, "soc_rtl"), require_type_path=False) if "soc_rtl" in d else None,
             components=[Component.load(root, c) for c in d.get("components", [])],
-            toolchain=ToolchainConfig.load(d.get("toolchain", {})),
+            toolchain=ToolchainConfig.load(_section(d, "toolchain")),
             path=path,
+            **(copy.deepcopy(UnitSettings.DEFAULTS) | UnitSettings._load_settings(d, "top level")),
         )
 
-        seen: dict[str, int] = {}
-        for c in cfg.components:
-            seen[c.name] = seen.get(c.name, 0) + 1
-        dupes = sorted(name for name, count in seen.items() if count > 1)
+        names = [c.name for c in cfg.components]
+        dupes = sorted({n for n in names if names.count(n) > 1})
         if dupes:
             raise ValueError(
                 f"cosim.json: component name(s) collide: {dupes!r} - each component's "
@@ -316,3 +334,11 @@ class Config:
             )
 
         return cfg
+
+    def component(self, name: str) -> Component:
+        """The declared component `name`; raises if there is none."""
+        for c in self.components:
+            if c.name == name:
+                return c
+        valid = ", ".join(sorted(c.name for c in self.components))
+        raise RuntimeError(f"Unknown component {name!r}; valid: {valid}")

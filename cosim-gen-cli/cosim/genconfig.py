@@ -1,22 +1,5 @@
-"""Derive a cosim.json component list from a design's diplomacy config.
-
-Ported from leon_vp's readConfig.py. The original script directly shelled out
-cosim-gen-opt/arcilator/firtool per labeled module - that's now cosim build's
-job. This only extracts each labeled module's structured IO (its clock/reset/
-bus/interrupt interfaces - see config.Component) from its diplomacy interface
-tags and writes them into cosim.json's "components" list.
-
-If a dts is given, this also derives the component's QEMU-side dts binding
-(config.Component's dts_path field): a TLBus/AXIBus leaf's diplomacy
-"AddressMap" gives a base address, matched against the dts's own node
-addresses (nodes are named "<name>@<addr>" by devicetree convention, and
-cosim-gen's dts_overlay resolves a component by dts path/compat, not by
-address - address is only used here, at generation time, to find which dts
-node the component's bus(es) correspond to). Only the first bus leaf that
-resolves to a dts node is used - a component binds to exactly one dts node
-(see config.Component's compat/dts_path docstring), even if it has several
-buses attached to that node's several reg windows.
-"""
+"""Derives cosim.json's components from a design's diplomacy config. With a dts,
+each component also gets the dts_path of the node its first bus address matches."""
 
 from __future__ import annotations
 
@@ -27,18 +10,15 @@ from pathlib import Path
 import yaml
 
 from .codegen.dts_overlay import parseDts
+from .config import ToolchainConfig
 from .interfaces import bus_kinds
+from .toolchain import resolve
 
-# Diplomacy interface tags this script knows how to classify - not to be
-# confused with cosim.json's own "interfaces" list (config.Component), which
-# is what these get turned into.
 _SUPPORTED_DIPLOMACY_TAGS = {
     "Reset", "Clock", "AXIBus", "TLBus", "IntrRecv", "IntrDriver", "ClockGroup",
 }
 
-# Diplomacy's "AddressMap" is a Scala repr, e.g.
-# "List(AddressSet(0x64000000, 0xfff))" - only the base address of the first
-# range is needed to identify which dts node ("serial@64000000") this is.
+# Base address in a diplomacy "AddressMap", e.g. "List(AddressSet(0x64000000, 0xfff))".
 _ADDRESS_SET_RE = re.compile(r"AddressSet\(0x([0-9a-fA-F]+)")
 
 
@@ -54,7 +34,7 @@ class _Port:
         self.config = config.get("config", {})
         self.children = [_Port(n, c) for n, c in config.get("children", {}).items()]
 
-    def get_leafs(self, with_config: bool = True) -> list["_Port"]:
+    def get_leafs(self, with_config: bool = True) -> list[_Port]:
         if (with_config and self.config) or not self.children:
             return [self]
         leafs = []
@@ -71,9 +51,6 @@ class _Port:
         )
 
     def clean_name(self) -> str:
-        """The bare post-extraction port prefix, with no regex suffix - the
-        structured schema's clock/reset/bus/interrupt names are plain names,
-        not patterns (Component.io_regex derives the pattern itself)."""
         return self.name.replace(".", "_")
 
 
@@ -92,10 +69,7 @@ class _ModIO:
 
 
 def _bus_address(config: dict) -> int | None:
-    """First base address of a leaf's TLBus/AXIBus "AddressMap", if it has
-    one. AXI ports in practice often don't (e.g. an anonymous crossbar
-    output whose address decode lives elsewhere) - those are left unmapped
-    rather than guessed at."""
+    """First base address of a leaf's TLBus/AXIBus "AddressMap", if any."""
     for key in ("TLBus", "AXIBus"):
         bus_cfg = config.get(key)
         if isinstance(bus_cfg, dict):
@@ -106,7 +80,9 @@ def _bus_address(config: dict) -> int | None:
 
 
 def _dts_address_index(dts_path: Path) -> dict[int, object]:
-    tree = parseDts(str(dts_path))
+    # No cosim.json here: resolve dtc like `cosim doctor` (DTC env var, then $PATH).
+    dtc = resolve(ToolchainConfig())["dtc"] or "dtc"
+    tree = parseDts(str(dts_path), dtc)
     index = {}
     for node in tree.all_nodes():
         reg = list(node.get_reg() or [])
@@ -116,12 +92,7 @@ def _dts_address_index(dts_path: Path) -> dict[int, object]:
 
 
 def _component_dts_path(bus_leafs: list[_Port], addr_index: dict) -> str | None:
-    """The one dts node this component binds to (see config.Component's
-    dts_path field) - the first bus leaf whose diplomacy AddressMap base
-    address matches a dts node's own address, or None if none of them do.
-    A component binds to exactly one node even when it has several buses
-    attached to that node's several reg windows, so only one match is
-    needed - not one per leaf."""
+    """Path of the dts node at the first matching bus address, or None."""
     for leaf in bus_leafs:
         addr = _bus_address(leaf.config)
         if addr is None:
@@ -132,30 +103,20 @@ def _component_dts_path(bus_leafs: list[_Port], addr_index: dict) -> str | None:
     return None
 
 
-# Only TileLink has a working codegen protocol today (see
-# cosim/interfaces/tilelink.py) - an AXIBus leaf is noted as unmapped rather
-# than emitted with a kind the codegen can't actually wire yet.
+# Only TileLink has a codegen kind; AXI buses are noted, not declared.
 _BUS_LEAF_KIND = {"TLBus": "tilelink"}
 
 
 def _classify_component(
     mod: _ModIO, supported: list[_Port], addr_index: dict | None = None
 ) -> tuple[dict, list[str], list[str]]:
-    """Build the structured 'interfaces' list (see config.Component) from a
-    labeled module's supported leaves - the same classification a hand-author
-    would do by reading the module's own port list, just automated from the
-    diplomacy config's interface tags. When addr_index is given, the
-    component also gets its `dts_path` binding derived and merged in directly
-    (see config.Component) - one node for the whole component, not per bus."""
+    """(component, notes, unmapped) for a labeled module; `addr_index` adds dts_path."""
     notes = []
     unmapped = []
     interfaces = []
 
     clock_leaf = next((leaf for leaf in supported if "Clock" in leaf.config), None)
-    # freq_mhz has no project-wide default (every clock must declare its own -
-    # see config.ClockInterface) and diplomacy has no notion of clock
-    # frequency to derive one from, so this is left null - a deliberate
-    # loading error until the user fills it in, not a silent guess.
+    # Diplomacy has no clock frequency; left null so loading fails until it's set.
     interfaces.append({"kind": "clock", "name": clock_leaf.clean_name() if clock_leaf else "clock", "freq_mhz": None})
     notes.append(f"{mod.typ}: freq_mhz left null - fill in this clock's actual frequency")
     if clock_leaf is None:
@@ -179,11 +140,7 @@ def _classify_component(
             notes.append(f"{mod.typ}.{leaf.clean_name()}: AXI bus found but no AXI codegen kind yet - not declared")
 
     for leaf in supported:
-        # 'prefix', not 'name' (exact) - a diplomacy leaf's port may still
-        # expand into several extracted leaf ports (e.g. a bundled
-        # `_sync_0..N` vector), and nothing here inspects the RTL to know
-        # whether it doesn't. Hand-edit to 'name' once you've confirmed a
-        # given interrupt really is a single exact port.
+        # 'prefix': a leaf may expand into several ports.
         if "IntrDriver" in leaf.config and leaf.dir == "Output":
             interfaces.append({"kind": "interrupt", "prefix": leaf.clean_name(), "dir": "out"})
         elif "IntrRecv" in leaf.config:

@@ -2,16 +2,15 @@
 import argparse
 import json
 from pathlib import Path
-from .typedio import *
+
 from .arc_model import gen_cpp, gen_header
 from .arc_wrapper import gen_wrapper
 from .sim_main import gen_main
+from .typedio import *
+
 
 def processJson(state_json, io_spec=None) -> List[ModelInfo]:
-  """io_spec is the cosim.json Component declaration (its 'interfaces' list)
-  to classify extracted ports against - the whole-design case (no [[components]]
-  declared, so no declaration to classify from) falls back to the old
-  name-pattern guessing (infer_typedIO)."""
+  """Models of a state json, classified by `io_spec` or, if None, by port names."""
   with open(state_json, "r") as f:
     models = [ModelInfo.decode(d) for d in json.load(f)]
 
@@ -32,30 +31,14 @@ def processJson(state_json, io_spec=None) -> List[ModelInfo]:
 
 
 def _write_if_changed(path: Path, content: str) -> None:
-  # Leave the file's mtime alone when content is unchanged, so downstream make
-  # rules keyed on it (sim.o : sim.cpp) don't needlessly recompile - the same
-  # incremental-build property project.py's build loop relied on before the
-  # codegen moved into a make recipe.
+  # Keeps the mtime when unchanged, so make doesn't recompile.
   if not path.exists() or path.read_text() != content:
     path.write_text(content)
 
 
 def emit(state_json: str, backend: str, out_dir: str, name: str, io_spec=None) -> None:
-  """Emit the SystemC sim sources for one component (or the whole design when
-  io_spec is None): always sim.cpp, plus the arcilator model header/cpp and
-  A<Model>.h wrapper for the arcilator backend. Verilator needs no wrapper -
-  its own V<Top>.h is already a SystemC module. Output filenames derive from
-  `name` (the component type / whole-design top), which the caller knows at
-  makefile-generation time, so the make rules can name these targets up front
-  even though the arc model's own class name isn't known until extraction.
-
-  sim.cpp itself is shared between backends (one file, #ifdef USE_ARCILATOR/
-  USE_VERILATOR-guarded at compile time - see codegen/sim_main.py/
-  templates/sim_cpp.j2) - a project building both backends only generates it
-  once, whichever backend's own recipe gets there first (_write_if_changed
-  makes the second call a no-op, since wrapper_name below is derived from the
-  model name alone, not from `backend`, so its content doesn't vary by which
-  backend triggered this call)."""
+  """Writes sim.cpp to `out_dir`, plus the arcilator model and A<Model>.h wrapper
+  for the arcilator backend. File names derive from `name`."""
   models = processJson(state_json, io_spec=io_spec)
   assert len(models) == 1, "Currently only one top module is allowed"
   model = models[0]
@@ -66,10 +49,7 @@ def emit(state_json: str, backend: str, out_dir: str, name: str, io_spec=None) -
       io.name = io.name + '_'
 
   out = Path(out_dir)
-  # Named after the model alone (not gated on `backend`) so sim.cpp's
-  # "#include" of it is identical text regardless of which backend generated
-  # this particular invocation - the actual header/cpp/wrapper files
-  # themselves are still only ever written for the arcilator backend, below.
+  # Independent of `backend`, so sim.cpp is the same for both.
   wrapper_name = f"A{model.name}.h"
   if backend == "arcilator":
     header_path = out / f"gen-arc-{name}.h"
