@@ -31,6 +31,16 @@ def _section(d: dict, key: str) -> dict:
     return value
 
 
+def _reject_basename_collisions(files: list[Path], what: str) -> None:
+    """Fails on two different files sharing one basename; the same file twice is fine."""
+    seen: dict[str, Path] = {}
+    for f in files:
+        prior = seen.get(f.name)
+        if prior is not None and prior.resolve() != f.resolve():
+            raise ValueError(f"cosim.json: {what} {prior} and {f} share the basename {f.name!r}")
+        seen[f.name] = f
+
+
 def _int(d: dict, key: str, where: str) -> int:
     value = d[key]
     if not isinstance(value, int) or isinstance(value, bool):
@@ -105,6 +115,8 @@ class DesignConfig:
     annotations: Path | None = None
     # Backends `cosim build` builds; `cosim run` defaults to the first.
     supported_backends: list[str] = field(default_factory=list)
+    # Verilog sources passed to every verilator build.
+    extra_vsrcs: list[Path] = field(default_factory=list)
 
     @property
     def lowered(self) -> bool:
@@ -122,12 +134,15 @@ class DesignConfig:
                 "cosim.json: design.supported_backends must be a non-empty list of distinct "
                 f"'arcilator'/'verilator', got {backends!r}"
             )
+        if d.get("extra_vsrcs") and "arcilator" in backends:
+            raise ValueError("cosim.json: design.extra_vsrcs isn't supported with the arcilator backend")
         return DesignConfig(
             input=_resolve(root, d["input"]),
             dts=_resolve(root, d.get("dts")),
             seqmem=_resolve(root, d.get("seqmem")),
             annotations=_resolve(root, d.get("annotations")),
             supported_backends=list(backends),
+            extra_vsrcs=[_resolve(root, f) for f in _str_list(d, "extra_vsrcs", "design")] if "extra_vsrcs" in d else [],
         )
 
 
@@ -159,6 +174,7 @@ class Component(UnitSettings):
     compat: str | None = None
     dts_path: str | None = None
     extra_files: list[Path] = field(default_factory=list)
+    extra_srcs: list[Path] = field(default_factory=list)
     # The unit's sim.cpp is user-maintained and never generated.
     user_sim_cpp: bool = False
 
@@ -235,6 +251,13 @@ class Component(UnitSettings):
         default_name = path.rsplit("/", 1)[-1] if path else d.get("type")
         name = d.get("name", default_name) if require_type_path else None
 
+        # mk/component.mk builds `<basename>.o` from `%.cpp`.
+        extra_srcs = [_resolve(root, f) for f in _str_list(d, "extra_srcs", what)] if "extra_srcs" in d else []
+        for f in extra_srcs:
+            if f.suffix != ".cpp":
+                raise ValueError(f"cosim.json: {what}: extra_srcs entry {f} must be a .cpp file")
+        _reject_basename_collisions(extra_srcs, f"{what}: extra_srcs")
+
         return Component(
             type=d.get("type"),
             path=path,
@@ -243,6 +266,7 @@ class Component(UnitSettings):
             compat=d.get("compat"),
             dts_path=d.get("dts_path"),
             extra_files=[_resolve(root, f) for f in d.get("extra_files", [])],
+            extra_srcs=extra_srcs,
             user_sim_cpp=_bool(d, "user_sim_cpp", what) if "user_sim_cpp" in d else False,
             **UnitSettings._load_settings(d, what),
         )
@@ -323,6 +347,9 @@ class Config(UnitSettings):
             path=path,
             **(copy.deepcopy(UnitSettings.DEFAULTS) | UnitSettings._load_settings(d, "top level")),
         )
+
+        units = cfg.components + ([cfg.soc_rtl] if cfg.soc_rtl else [])
+        _reject_basename_collisions([f for c in units for f in c.extra_files], "extra_files")
 
         names = [c.name for c in cfg.components]
         dupes = sorted({n for n in names if names.count(n) > 1})

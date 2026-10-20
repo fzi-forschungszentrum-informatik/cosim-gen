@@ -155,6 +155,7 @@ from .gpio import GpioInterface as GpioInterface
 from .interrupt import IrqInterface as IrqInterface
 from .reset import ResetInterface as ResetInterface
 from .tilelink import TileLinkBus as TileLinkBus
+from .unconnected import UnconnectedInterface as UnconnectedInterface
 from .wire import _WireInterface as _WireInterface
 
 

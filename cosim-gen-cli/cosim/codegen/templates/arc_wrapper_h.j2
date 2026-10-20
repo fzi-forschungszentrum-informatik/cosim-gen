@@ -14,7 +14,7 @@
 {% for model in models %}
 class A{{ model.name }} : public ArcSystemCWrapper<{{ model.name }}, ValueChangeDump<{{ model.name }}Layout> > {
 public:
-{% for sig in model.typedIO.getSignals(true, true) %}
+{% for sig in model.typedIO.getSignals(true, true) if sig.numBits > 0 %}
   {{ sig | systemc_port_type }} {{ sig.name }}{"{{ sig.name }}"};
 {% endfor %}
 

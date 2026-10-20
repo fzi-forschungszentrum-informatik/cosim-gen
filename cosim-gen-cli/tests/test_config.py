@@ -6,7 +6,9 @@ import json
 
 import pytest
 
+from cosim.codegen.typedio import build_typedIO
 from cosim.config import Component, Config, DesignConfig, ToolchainConfig
+from cosim.statejson import StateInfo, StateType
 from cosim.toolchain import _TOOL_SPECS
 
 
@@ -32,6 +34,7 @@ RESET = {"kind": "reset", "name": "reset"}
 BUS = {"kind": "tilelink", "prefix": "auto_control_xing_in", "dir": "slave"}
 IRQ = {"kind": "interrupt", "name": "auto_int_xing_out_sync_0", "dir": "out"}
 GPIO = {"kind": "gpio", "prefix": "auto_io_out_pins"}
+UNCONNECTED = {"kind": "unconnected", "name": "sideband"}
 
 
 # --- a valid config loads, as a control -------------------------------------
@@ -270,6 +273,22 @@ def test_io_regex_is_ordered_by_kind_not_declaration():
     )
 
 
+def _ports(*names):
+    return [StateInfo(n, 0, 1, StateType.INPUT, None, None) for n in names]
+
+
+def test_unconnected_port_stays_a_passthrough():
+    c = load(component(CLOCK, RESET, UNCONNECTED))
+    assert c.io_regex == "clock$|reset$|sideband$"
+    assert [s.name for s in build_typedIO(c, _ports("clock", "reset", "sideband")).other] == ["sideband"]
+
+
+def test_unconnected_missing_port_rejected():
+    c = load(component(CLOCK, UNCONNECTED))
+    with pytest.raises(ValueError, match="'sideband' not found"):
+        build_typedIO(c, _ports("clock"))
+
+
 # --- full Config.load() round-trip through a real file ---------------------------
 
 def test_full_config_round_trip(tmp_path):
@@ -348,6 +367,17 @@ def test_supported_backends_valid(tmp_path):
     assert d.supported_backends == ["arcilator", "verilator"]
 
 
+def test_extra_vsrcs_must_be_a_list(tmp_path):
+    with pytest.raises(TypeError, match="extra_vsrcs must be a list"):
+        DesignConfig.load(tmp_path, {"input": "d.fir", "extra_vsrcs": "ext.sv"})
+
+
+def test_extra_vsrcs_rejected_with_arcilator():
+    with pytest.raises(ValueError, match="extra_vsrcs isn't supported with the arcilator"):
+        DesignConfig.load(None, {"input": "d.fir", "supported_backends": ["arcilator", "verilator"],
+                                 "extra_vsrcs": ["ext.sv"]})
+
+
 # --- top-level build/run defaults (jobs/sync_quantum/max_cycles/extra_args) -------
 
 def test_top_level_defaults(tmp_path):
@@ -396,7 +426,7 @@ def test_unit_options_inherit_unless_set():
 
 @pytest.mark.parametrize("key, value", [
     ("trace", "yes"), ("user_sim_cpp", 1), ("cxxflags", "-O2"),
-    ("sync_quantum", "x"), ("max_cycles", 1.5),
+    ("sync_quantum", "x"), ("max_cycles", 1.5), ("extra_srcs", "a.cpp"),
 ])
 def test_unit_option_type_rejected(key, value):
     with pytest.raises(TypeError) as exc_info:
