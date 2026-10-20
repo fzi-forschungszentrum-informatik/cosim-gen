@@ -2,7 +2,7 @@
   "schemaVersion": "0.9",
   "basicInfo": {
     "ipName": "cosim-gen",
-    "version": "0.9.0",
+    "version": "0.9.1",
     "sourceLanguages": ["C++", "Python"],
     "trl": "TRL-6",
     "status": "Prototype implemented",
