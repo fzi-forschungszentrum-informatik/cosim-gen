@@ -184,6 +184,11 @@ It's shaped like a `components[]` entry, minus the fields that don't apply to it
   can contribute their own `extra_files` too — all lists are additive: there's one
   firtool call for the whole design, so a component's `extra_files` just documents which
   files it cares about, not a separate staging location.
+- **`extra_srcs`** — a list of `.cpp` files (relative to `cosim.json`) compiled and linked
+  into this unit's `sim`, typically a SystemC model defining `cosim_user_wire()` (see
+  [Unit settings](#how-cosim-build-works)). Objects are named by basename, so two entries
+  must not share one. Quoted
+  `#include`s resolve relative to each source file.
 - No `type`/`path` (there's nothing to extract - this *is* the whole design) and no
   `compat`/`dts_path`: the whole-design unit has no QEMU bus/interrupt coupling path
   (`build()`'s QEMU-overlay detection, the dtb generation, and `cosim run`'s coupled-run
@@ -237,6 +242,8 @@ other end of each wire — one entry per interface, each tagged with its own `"k
   node at all — they're wired the same as `gpio` (see below), just labeled for clarity.
 - **`{ "kind": "gpio", "prefix"/"name" }`** — also wired to QEMU (remote-port gpio
   wires), but *not* interrupt-routed — external I/O, not a PLIC source.
+- **`{ "kind": "unconnected", "name" }`** — keeps the port at the extraction boundary
+  without wiring it to anything.
 - **`compat`** (a dts `compatible` string) or **`dts_path`** (an explicit dts node path)
   — this component's own **QEMU-side dts binding**: the single existing node in
   `design.dts` it talks to. Only needed for `qemu`/`cosim` run modes, and only one of the
@@ -260,7 +267,8 @@ other end of each wire — one entry per interface, each tagged with its own `"k
   **`coverage`**, **`cxxflags`**, **`ldlibs`**, **`verilator_args`** and
   **`arcilator_args`**. **`extra_files`** is also optional but
   **additive**, not overriding — see
-  [`soc_rtl.extra_files`](#soc_rtl) above.
+  [`soc_rtl.extra_files`](#soc_rtl) above. **`extra_srcs`** is optional and per
+  component — see [`soc_rtl.extra_srcs`](#soc_rtl) above.
 - **`user_sim_cpp`** — `true` keeps `cosim build` from generating this unit's `sim.cpp`,
   so you can maintain your own.
 
@@ -447,8 +455,10 @@ which one `make run`/`run-coupled`/`sim` executes - exactly the mechanism `cosim
 every `cosim build` from `cosim.json` (see
 [Top-level build/run defaults](#top-level-buildrun-defaults)); don't edit them. The
 generated `sim.cpp` calls a weak `cosim_user_wire(Top&)` hook where it lists the undeclared
-ports; a strong definition in your own source binds them. For a one-off run, override a
-variable on the command line, e.g. `make -C build/components/uart_0 TRACE=1`.
+ports; a strong definition in one of the unit's `extra_srcs` binds them. `Top` is only
+defined inside `sim.cpp`, so from another file look its signals up by name, e.g.
+`sc_find_object("top.<signal>")`. For a one-off run, override a variable on the command
+line, e.g. `make -C build/components/uart_0 TRACE=1`.
 
 Each component dir is also independently buildable: `cd build/components/uart_0 && make`
 builds just that one; `make run` runs its `sim` standalone (only meaningful for a

@@ -60,13 +60,19 @@ class _RenderCtx:
     # Reset driven by QEMU's TLM reset line: the first bus's, else the first declared.
     qemu_reset_name: str = ""
     init_entries: list[str] = field(default_factory=list)
+    # extra_srcs' cosim_user_wire() connects the undeclared ports.
+    user_wired: bool = False
 
     @property
     def needs_qemu(self) -> bool:
         return self.model.typedIO.needs_qemu
 
+    @property
+    def undriven_inputs(self) -> list[StateInfo]:
+        return [sig for sig in self.model.typedIO.other if sig.typ == StateType.INPUT]
 
-def _build_ctx(wrapper_path: str, model: "ModelInfo", top_module: str) -> _RenderCtx:
+
+def _build_ctx(wrapper_path: str, model: "ModelInfo", top_module: str, user_wired: bool) -> _RenderCtx:
     top_module = top_module or model.name
     inst = top_module.lower()
     io = model.typedIO
@@ -117,6 +123,7 @@ def _build_ctx(wrapper_path: str, model: "ModelInfo", top_module: str) -> _Rende
         num_slave_buses=num_slave, num_master_buses=num_master,
         wire_out=wire_out, wire_in=wire_in, protocol_includes=includes,
         qemu_reset_name=qemu_reset_name,
+        user_wired=user_wired,
     )
 
     if ctx.needs_qemu:
@@ -136,6 +143,6 @@ def _build_ctx(wrapper_path: str, model: "ModelInfo", top_module: str) -> _Rende
     return ctx
 
 
-def gen_main(wrapper_path: str, model: "ModelInfo", top_module: str | None = None) -> str:
-    ctx = _build_ctx(wrapper_path, model, top_module)
+def gen_main(wrapper_path: str, model: "ModelInfo", top_module: str | None, user_wired: bool) -> str:
+    ctx = _build_ctx(wrapper_path, model, top_module, user_wired)
     return env().get_template("sim_cpp.j2").render(ctx=ctx)

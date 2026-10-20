@@ -59,7 +59,8 @@ def emit(state_json: str, backend: str, out_dir: str, name: str, io_spec=None) -
     _write_if_changed(cpp_path, gen_cpp(header_path.name, [model]))
     _write_if_changed(wrapper_path, gen_wrapper(str(wrapper_path), header_path.name, [model]))
 
-  _write_if_changed(out / "sim.cpp", gen_main(wrapper_name, model, model.name))
+  user_wired = bool(io_spec is not None and io_spec.extra_srcs)
+  _write_if_changed(out / "sim.cpp", gen_main(wrapper_name, model, model.name, user_wired))
 
 
 def main():
@@ -86,9 +87,10 @@ def main():
       parser.error("--component requires --config")
     from ..config import Config
     cfg = Config.load(Path(args.config))
-    io_spec = next((c for c in cfg.components if c.name == args.component), None)
-    if io_spec is None:
-      parser.error(f"--component {args.component!r} not found in {args.config}")
+    try:
+      io_spec = cfg.component(args.component)
+    except RuntimeError as e:
+      parser.error(str(e))
 
   emit(args.state_json, args.backend, args.out_dir, args.name, io_spec)
 

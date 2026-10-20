@@ -47,7 +47,8 @@ typedef A{{ ctx.model.name }} {{ ctx.top_module }}_Wrapper;
 
 struct Top;
 {% if ctx.model.typedIO.other %}
-// Weak no-op default; define cosim_user_wire() to bind the signals listed below.
+// Weak no-op default; define cosim_user_wire() in an extra source to bind the
+// signals listed below.
 void cosim_user_wire(Top &top) __attribute__((weak));
 void cosim_user_wire(Top &top) { /* no user model connected */ }
 {% endif %}
@@ -87,7 +88,9 @@ SC_MODULE(Top) {
     {{ ctx.inst }}.{{ sig.name }}({{ ctx.inst }}_{{ sig.name }});
 {% endfor %}
 {% if ctx.model.typedIO.other %}
-    #warning Unconnected signals ({{ ctx.inst }}): {{ ctx.model.typedIO.other | map(attribute="name") | join(", ") }}
+{% if ctx.undriven_inputs and not ctx.user_wired %}
+    #warning Undriven inputs ({{ ctx.inst }}) - connect them in a cosim_user_wire() source listed in extra_srcs of cosim.json: {{ ctx.undriven_inputs | map(attribute="name") | join(", ") }}
+{% endif %}
     cosim_user_wire(*this);
 {% endif %}
 {% if ctx.needs_qemu %}

@@ -20,6 +20,8 @@ SIM_LDLIBS   := -lsystemc -lpthread -latomic $(EXTRA_LDLIBS)
 COMPILE_ARCILATOR = $(CXX) -MMD $(BASE_CPPFLAGS) -DUSE_ARCILATOR=1 -I . $(SIM_CXXFLAGS)
 COMPILE_VERILATOR = $(CXX) -MMD $(BASE_CPPFLAGS) -DUSE_VERILATOR=1 $(VERI_INCLUDES) $(SIM_CXXFLAGS)
 
+# Objects are named by basename; vpath finds each source in its own directory.
+vpath %.cpp $(sort $(dir $(EXTRA_SRCS)))
 EXTRA_OBJS_ARCILATOR := $(patsubst %,$(O_ARCILATOR)/%.o,$(basename $(notdir $(EXTRA_SRCS))))
 EXTRA_OBJS_VERILATOR := $(patsubst %,$(O_VERILATOR)/%.o,$(basename $(notdir $(EXTRA_SRCS))))
 
