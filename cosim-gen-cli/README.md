@@ -458,7 +458,8 @@ every `cosim build` from `cosim.json` (see
 generated `sim.cpp` calls a weak `cosim_user_wire(Top&)` hook where it lists the undeclared
 ports; a strong definition in one of the unit's `extra_srcs` binds them. `Top` is only
 defined inside `sim.cpp`, so from another file look its signals up by name, e.g.
-`sc_find_object("top.<signal>")`. For a one-off run, override a variable on the command
+`sc_find_object("top.<signal>")`. Changing `trace`, `sysc_trace` or `coverage`
+rebuilds the unit. For a one-off run, override a variable on the command
 line, e.g. `make -C build/components/uart_0 TRACE=1`.
 
 Each component dir is also independently buildable: `cd build/components/uart_0 && make`
