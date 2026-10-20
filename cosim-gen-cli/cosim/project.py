@@ -10,6 +10,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from . import paths
@@ -355,11 +356,56 @@ def _gen_dtb(cfg: Config, tools: ResolvedToolchain, build_dir: Path, comp_names:
     return dtb
 
 
+# Seconds to let the peers finish shutting down after either side exits.
+_SIM_SHUTDOWN_GRACE_S = 1.0
+
+_SIM_LOG_TAIL_LINES = 40
+
+
+def _sim_log_tail(name: str, build_dir: Path, backend: str) -> str:
+    """The last lines of a component's run log."""
+    log = build_dir / "components" / name / f"build-{backend}" / "run.log"
+    try:
+        lines = log.read_text(errors="replace").splitlines()
+    except FileNotFoundError:
+        return f"(no {log} - the sim died before its recipe could tee to it)"
+    return "\n".join(lines[-_SIM_LOG_TAIL_LINES:])
+
+
+def _stop_qemu(qemu: subprocess.Popen, machine_path: Path) -> None:
+    # Through its pid file: terminating `make` would leave QEMU running.
+    try:
+        pid = int((machine_path / "qemu.pid").read_text())
+    except (FileNotFoundError, ValueError):
+        pid = qemu.pid
+    # QEMU can hang on a crashed peer and then ignores SIGTERM.
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.kill(pid, sig)
+        except ProcessLookupError:
+            pass
+        try:
+            qemu.wait(timeout=_SIM_SHUTDOWN_GRACE_S)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+    qemu.wait()
+
+
+def _qemu_peer_disconnected(build_dir: Path) -> bool:
+    # QEMU's remote-port thread exits with code 0 even when its peer crashed.
+    try:
+        with (build_dir / "run.log").open(errors="replace") as log:
+            return any(re.search(r": Disconnected clk=\d+ ns\b", line) for line in log)
+    except FileNotFoundError:
+        return False
+
+
 def _run_coupled(cfg: Config, tools: ResolvedToolchain, build_dir: Path, dtb: Path, comp_names: list[str],
                  backend: str) -> int:
     # One sim per component, each on its own remote-port socket under one machine path.
     machine_path = Path(tempfile.mkdtemp(prefix="qemu-cosim."))
-    procs = []
+    procs: list[tuple[str, subprocess.Popen]] = []
     try:
         for name in comp_names:
             unit = _unit_spec(cfg, cfg.component(name), False, build_dir)
@@ -368,19 +414,49 @@ def _run_coupled(cfg: Config, tools: ResolvedToolchain, build_dir: Path, dtb: Pa
             cmd = ["make", "-C", str(unit["dir"]), "run-coupled", f"SOCK={sock}", f"BACKEND={backend}"]
             print("+", " ".join(cmd))
             # Own process group, so the cleanup below also kills the sim under make.
-            procs.append(subprocess.Popen(cmd, start_new_session=True))
+            procs.append((name, subprocess.Popen(cmd, start_new_session=True)))
 
-        _run(["make", "-C", str(build_dir / "qemu"), "run-qemu-coupled", f"QEMU={tools['qemu']}",
-              f"DTB={dtb}", f"MACHINE_PATH={machine_path}", f"LOG={build_dir / 'run.log'}"])
+        qemu_cmd = ["make", "-C", str(build_dir / "qemu"), "run-qemu-coupled", f"QEMU={tools['qemu']}",
+                    f"DTB={dtb}", f"MACHINE_PATH={machine_path}", f"LOG={build_dir / 'run.log'}"]
+        print("+", " ".join(qemu_cmd))
+        qemu = subprocess.Popen(qemu_cmd)
+        stopped_qemu = False
+        try:
+            while qemu.poll() is None and all(p.poll() is None for _, p in procs):
+                time.sleep(0.5)
+            try:
+                qemu.wait(timeout=_SIM_SHUTDOWN_GRACE_S)
+            except subprocess.TimeoutExpired:
+                _stop_qemu(qemu, machine_path)
+                stopped_qemu = True
+            deadline = time.monotonic() + _SIM_SHUTDOWN_GRACE_S
+            for _, p in procs:
+                try:
+                    p.wait(timeout=max(0, deadline - time.monotonic()))
+                except subprocess.TimeoutExpired:
+                    pass
+        except BaseException:
+            _stop_qemu(qemu, machine_path)
+            raise
+        # A sim ended first; one ending cleanly (e.g. max_cycles) also fails the others.
+        sim_failed_first = (stopped_qemu or _qemu_peer_disconnected(build_dir)) \
+            and all(p.returncode != 0 for _, p in procs)
+        crashed = [(name, p.returncode) for name, p in procs
+                   if sim_failed_first and p.returncode is not None]
+        if not crashed and not stopped_qemu and qemu.returncode != 0:
+            raise subprocess.CalledProcessError(qemu.returncode, qemu_cmd)
     finally:
-        for p in procs:
+        for _, p in procs:
             try:
                 os.killpg(p.pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
-        for p in procs:
+        for _, p in procs:
             p.wait()
         shutil.rmtree(machine_path, ignore_errors=True)
+    if crashed:
+        raise RuntimeError("component sim(s) crashed:\n\n" + "\n\n".join(
+            f"{name} (exit code {rc}):\n{_sim_log_tail(name, build_dir, backend)}" for name, rc in crashed))
     return 0
 
 

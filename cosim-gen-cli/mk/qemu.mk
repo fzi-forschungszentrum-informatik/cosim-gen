@@ -20,4 +20,4 @@ run-qemu:
 # Coupled to the sims listening on $(MACHINE_PATH). Without -sync-quantum,
 # remote-port devices get no default quantum.
 run-qemu-coupled:
-	$(QEMU) -M riscv-fdt -hw-dtb $(DTB) -machine-path $(MACHINE_PATH) -sync-quantum $(SYNC_QUANTUM) $(foreach e,$(ELFS),-device loader,file=$(e)) $(QEMU_ARGS) 2>&1 | tee $(LOG)
+	$(QEMU) -M riscv-fdt -hw-dtb $(DTB) -machine-path $(MACHINE_PATH) -pidfile $(MACHINE_PATH)/qemu.pid -sync-quantum $(SYNC_QUANTUM) $(foreach e,$(ELFS),-device loader,file=$(e)) $(QEMU_ARGS) 2>&1 | tee $(LOG)

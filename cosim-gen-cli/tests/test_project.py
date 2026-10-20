@@ -1,10 +1,12 @@
-"""project.py's pure-config helpers: the extra_files basename-collision guard and the
-generated Makefiles. No build deps - pure Python."""
+"""project.py: the extra_files basename-collision guard, the generated Makefiles and the
+crash handling of coupled runs. No build deps."""
 
 import json
+import subprocess
 
 import pytest
 
+from cosim import project
 from cosim.config import Config, _reject_basename_collisions
 from cosim.project import (
     _render_qemu_makefile,
@@ -108,3 +110,60 @@ def test_extra_srcs_builtin_object_collision_rejected(tmp_path, src):
 def test_extra_srcs_basename_collision_rejected(tmp_path):
     with pytest.raises(ValueError, match="share the basename"):
         _unit_mk(tmp_path, extra_srcs=["a/wire.cpp", "b/wire.cpp"])
+
+
+@pytest.fixture
+def fake_run(tmp_path, monkeypatch):
+    """Runs `_run_coupled` with sh scripts standing in for QEMU and the one sim."""
+    monkeypatch.setattr(project, "_SIM_SHUTDOWN_GRACE_S", 0.3)
+    real_popen = subprocess.Popen
+
+    def run(qemu_sh, sim_sh, *, wait_for_qemu=False):
+        def popen(cmd, **kw):
+            if "run-qemu-coupled" in cmd:
+                machine_path = next(a.split("=", 1)[1] for a in cmd if a.startswith("MACHINE_PATH="))
+                log = tmp_path / "build" / "run.log"
+                log.parent.mkdir(exist_ok=True)
+                with log.open("w") as output:
+                    p = real_popen(["sh", "-c", f"echo $$ > {machine_path}/qemu.pid; {qemu_sh}"],
+                                   cwd=tmp_path, stdout=output, stderr=subprocess.STDOUT)
+                if wait_for_qemu:
+                    p.wait(timeout=5)
+                return p
+            return real_popen(["sh", "-c", sim_sh], cwd=tmp_path, **kw)
+        monkeypatch.setattr(project.subprocess, "Popen", popen)
+        cfg = _cfg(tmp_path)
+        return project._run_coupled(cfg, {"qemu": "qemu"}, tmp_path / "build", tmp_path / "x.dtb",
+                                    ["u"], "verilator")
+    return run
+
+
+def test_sim_crash_stops_qemu(fake_run):
+    with pytest.raises(RuntimeError, match="crashed:\n\nu "):
+        fake_run("exec sleep 30", "sleep 0.3; exit 3")
+
+
+def test_sim_stopping_cleanly_is_no_crash(fake_run):
+    assert fake_run("sleep 0.6", "sleep 0.3; exit 0") == 0
+
+
+def test_sim_failing_as_qemu_exits_is_no_crash(fake_run):
+    assert fake_run("touch qemu-stopped; sleep 0.2",
+                    "while [ ! -e qemu-stopped ]; do sleep 0.01; done; exit 1") == 0
+
+
+@pytest.mark.parametrize("wait_for_qemu", [False, True])
+def test_sim_crash_causing_successful_qemu_exit_reported(fake_run, wait_for_qemu):
+    with pytest.raises(RuntimeError, match="crashed:\n\nu "):
+        fake_run("while [ ! -e sim-failed ]; do sleep 0.01; done; echo 'rp: Disconnected clk=0 ns'",
+                 "sleep 0.3; touch sim-failed; exit 3", wait_for_qemu=wait_for_qemu)
+
+
+def test_clean_sim_disconnect_is_no_crash(fake_run):
+    assert fake_run("while [ ! -e sim-done ]; do sleep 0.01; done; echo 'rp: Disconnected clk=0 ns'",
+                    "sleep 0.3; touch sim-done; exit 0") == 0
+
+
+def test_sim_failing_at_startup_reported(fake_run):
+    with pytest.raises(RuntimeError, match="crashed:\n\nu "):
+        fake_run("exec sleep 30", "exit 3")
