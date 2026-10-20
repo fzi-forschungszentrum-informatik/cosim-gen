@@ -367,8 +367,8 @@ resolution order below.
     the whole design's own `sim`; one component name (at most one) runs that extracted
     component's own sim instead. Run it again yourself for another target - the tool
     doesn't orchestrate multiple `rtl` runs together.
-  - `-j N` — `make -jN` when regenerating the dtb (default: top-level `jobs`, or all
-    CPUs). Doesn't affect the spawned `sim` binaries themselves.
+  - `-j N` — `make -jN` for `rtl` runs (default: top-level `jobs`, or all CPUs). Doesn't
+    affect the spawned `sim` binaries themselves.
   - `-l`/`--list` — print the component names declared in `cosim.json` (each tagged
     `qemu-coupled` or `rtl-only`, with the exact `cosim run` invocation for it, plus its
     `type` in brackets), then exit without running anything. Mutually exclusive with

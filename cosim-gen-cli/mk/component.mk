@@ -9,26 +9,7 @@
 O_ARCILATOR := build-arcilator
 O_VERILATOR := build-verilator
 
-CXX ?= g++
 LIBRP_DIR := $(LIBSOC_DIR)/libremote-port
-
-EXTRA_SRCS       ?=
-EXTRA_CXXFLAGS   ?=
-EXTRA_LDLIBS     ?=
-GENERATE_SIM_CPP ?= 1
-SYNC_QUANTUM     ?= 1000
-MAX_CYCLES       ?= 0
-RUN_ARGS         ?=
-TRACE            ?= 0
-SYSC_TRACE       ?= 0
-VM_COVERAGE      ?= 0
-
-SYSTEMC_STD ?= c++17
-
-ifneq ($(SYSTEMC_DIR),)
-SYSTEMC_INCLUDE ?= $(SYSTEMC_DIR)/include
-SYSTEMC_LIBDIR  ?= $(SYSTEMC_DIR)/lib
-endif
 
 BASE_CPPFLAGS := -I $(RTLGEN_INC_DIR) -I $(LIBSOC_DIR) -I $(LIBRP_DIR) -I $(SYSTEMC_INCLUDE) \
                  -DTRACE=$(TRACE) -DSYSC_TRACE=$(SYSC_TRACE) -DVM_COVERAGE=$(VM_COVERAGE) \
@@ -36,8 +17,9 @@ BASE_CPPFLAGS := -I $(RTLGEN_INC_DIR) -I $(LIBSOC_DIR) -I $(LIBRP_DIR) -I $(SYST
 SIM_CXXFLAGS := -Wall -O3 -g -std=$(SYSTEMC_STD) $(EXTRA_CXXFLAGS)
 SIM_LDFLAGS  := -L $(SYSTEMC_LIBDIR) -Wl,-rpath,$(SYSTEMC_LIBDIR)
 SIM_LDLIBS   := -lsystemc -lpthread -latomic $(EXTRA_LDLIBS)
+COMPILE_ARCILATOR = $(CXX) -MMD $(BASE_CPPFLAGS) -DUSE_ARCILATOR=1 -I . $(SIM_CXXFLAGS)
+COMPILE_VERILATOR = $(CXX) -MMD $(BASE_CPPFLAGS) -DUSE_VERILATOR=1 $(VERI_INCLUDES) $(SIM_CXXFLAGS)
 
-# Objects are named by basename.
 EXTRA_OBJS_ARCILATOR := $(patsubst %,$(O_ARCILATOR)/%.o,$(basename $(notdir $(EXTRA_SRCS))))
 EXTRA_OBJS_VERILATOR := $(patsubst %,$(O_VERILATOR)/%.o,$(basename $(notdir $(EXTRA_SRCS))))
 
@@ -59,7 +41,7 @@ clean:
 STATE_arcilator := $(O_ARCILATOR)/$(COMPONENT_NAME).json
 STATE_verilator := $(O_VERILATOR)/$(COMPONENT_NAME).json
 
-ifeq ($(strip $(GENERATE_SIM_CPP)),1)
+ifeq ($(GENERATE_SIM_CPP),1)
 sim.cpp: $(STATE_$(FIRST_BACKEND))
 	$(PYTHON) -m cosim.codegen.main --state-json $< --backend $(FIRST_BACKEND) --out-dir . --name $(COMPONENT_NAME) $(CONFIG_COMPONENT_FLAG)
 endif
@@ -67,7 +49,7 @@ endif
 HW_ARCILATOR := $(O_ARCILATOR)/$(COMPONENT_NAME).hw.mlir
 COMPONENT_LIB_ARCILATOR := $(O_ARCILATOR)/$(COMPONENT_NAME).o
 
-ifeq ($(strip $(TRACE)),1)
+ifeq ($(TRACE),1)
 ARCILATOR_ARGS += --observe-wires=1 --observe-ports=1 --observe-named-values=1 --observe-registers=1 --observe-memories=1
 else
 ARCILATOR_ARGS += --observe-wires=0 --observe-ports=0 --observe-named-values=0 --observe-registers=0 --observe-memories=0
@@ -84,20 +66,20 @@ $(COMPONENT_LIB_ARCILATOR) $(STATE_arcilator) &: $(HW_ARCILATOR) | $(O_ARCILATOR
 
 GEN_ARC_CPP := gen-arc-$(COMPONENT_NAME).cpp
 GEN_ARC_OBJ := $(O_ARCILATOR)/gen-arc-$(COMPONENT_NAME).o
-ifeq ($(strip $(GENERATE_SIM_CPP)),1)
+ifeq ($(GENERATE_SIM_CPP),1)
 $(GEN_ARC_CPP): $(STATE_arcilator)
 	$(PYTHON) -m cosim.codegen.main --state-json $< --backend arcilator --out-dir . --name $(COMPONENT_NAME) $(CONFIG_COMPONENT_FLAG)
 endif
 
 $(GEN_ARC_OBJ): $(GEN_ARC_CPP) | $(O_ARCILATOR)
-	$(CXX) -MMD $(BASE_CPPFLAGS) -DUSE_ARCILATOR=1 -I . $(SIM_CXXFLAGS) -c $< -o $@
+	$(COMPILE_ARCILATOR) -c $< -o $@
 
 # $(GEN_ARC_CPP): its codegen run also writes the A<Model>.h that sim.cpp includes.
 $(O_ARCILATOR)/sim.o: sim.cpp $(GEN_ARC_CPP) | $(O_ARCILATOR)
-	$(CXX) -MMD $(BASE_CPPFLAGS) -DUSE_ARCILATOR=1 -I . $(SIM_CXXFLAGS) -c $< -o $@
+	$(COMPILE_ARCILATOR) -c $< -o $@
 
 $(EXTRA_OBJS_ARCILATOR): $(O_ARCILATOR)/%.o: %.cpp | $(O_ARCILATOR)
-	$(CXX) -MMD $(BASE_CPPFLAGS) -DUSE_ARCILATOR=1 -I . $(SIM_CXXFLAGS) -c $< -o $@
+	$(COMPILE_ARCILATOR) -c $< -o $@
 
 build-arcilator/sim: $(O_ARCILATOR)/sim.o $(GEN_ARC_OBJ) $(EXTRA_OBJS_ARCILATOR) $(COMPONENT_LIB_ARCILATOR) $(LIBSYSTEMCTLM)
 	$(CXX) $^ $(SIM_LDFLAGS) $(SIM_LDLIBS) -o $@
@@ -114,10 +96,10 @@ VERILATOR_ARGS := -DPRINTF_COND=1 -DASSERT_VERBOSE_COND=1 -DSTOP_COND=1 -Wno-fat
                   --x-assign fast --x-initial fast --noassert \
                   -Wno-WIDTHEXPAND -Wno-UNSIGNED -Wno-WIDTHTRUNC -Wno-TIMESCALEMOD \
                   --expand-limit 1024 $(VERILATOR_EXTRA_ARGS)
-ifeq ($(strip $(TRACE)),1)
+ifeq ($(TRACE),1)
 VERILATOR_ARGS += --trace-vcd
 endif
-ifeq ($(strip $(VM_COVERAGE)),1)
+ifeq ($(VM_COVERAGE),1)
 VERILATOR_ARGS += --coverage
 endif
 
@@ -135,10 +117,10 @@ $(COMPONENT_LIB_VERILATOR) $(COMPONENT_RUNTIME_VERILATOR) $(COMPONENT_HDR_VERILA
 
 # sim.o also depends on V<Top>.h so a re-verilate re-triggers the recompile.
 $(O_VERILATOR)/sim.o: sim.cpp $(COMPONENT_HDR_VERILATOR) | $(O_VERILATOR)
-	$(CXX) -MMD $(BASE_CPPFLAGS) -DUSE_VERILATOR=1 $(VERI_INCLUDES) $(SIM_CXXFLAGS) -c $< -o $@
+	$(COMPILE_VERILATOR) -c $< -o $@
 
 $(EXTRA_OBJS_VERILATOR): $(O_VERILATOR)/%.o: %.cpp $(COMPONENT_HDR_VERILATOR) | $(O_VERILATOR)
-	$(CXX) -MMD $(BASE_CPPFLAGS) -DUSE_VERILATOR=1 $(VERI_INCLUDES) $(SIM_CXXFLAGS) -c $< -o $@
+	$(COMPILE_VERILATOR) -c $< -o $@
 
 build-verilator/sim: $(O_VERILATOR)/sim.o $(EXTRA_OBJS_VERILATOR) $(COMPONENT_LIB_VERILATOR) $(COMPONENT_RUNTIME_VERILATOR) $(LIBSYSTEMCTLM)
 	$(CXX) $^ $(SIM_LDFLAGS) $(SIM_LDLIBS) -o $@
