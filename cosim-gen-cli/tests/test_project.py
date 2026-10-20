@@ -46,6 +46,11 @@ def test_qemu_makefile_from_cosim_json(tmp_path):
     assert "SYNC_QUANTUM := 50\n" in mk
 
 
+def test_qemu_sync_quantum_overrides_top_level(tmp_path):
+    cfg = _cfg(tmp_path, sync_quantum=50, qemu={"sync_quantum": 7})
+    assert "SYNC_QUANTUM := 7\n" in _render_qemu_makefile(cfg)
+
+
 def test_extra_vsrcs_in_unit_makefile(tmp_path):
     cfg = _cfg(tmp_path, design={"input": "d.fir", "extra_vsrcs": ["ext.sv"]})
     mk = _render_unit_makefile(_unit_spec(cfg, cfg.components[0], False, tmp_path))

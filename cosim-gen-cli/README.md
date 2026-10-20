@@ -88,6 +88,7 @@ This installs the `cosim` command only; the external tools are found at run time
 |---|---|---|
 | `elfs` | `[]` | ELF files loaded into QEMU via `-device loader`, in order. |
 | `extra_args` | `[]` | Extra arguments appended to every `qemu` invocation. |
+| `sync_quantum` | top-level `sync_quantum` | QEMU's `-sync-quantum` in coupled runs. |
 
 ### Top-level build/run defaults
 

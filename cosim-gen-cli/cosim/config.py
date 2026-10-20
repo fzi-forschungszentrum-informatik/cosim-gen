@@ -159,7 +159,7 @@ class QemuConfig:
         return QemuConfig(
             elfs=[_resolve(root, f) for f in d.get("elfs", [])],
             extra_args=[str(a) for a in d.get("extra_args", [])],
-            sync_quantum=d.get("sync_quantum"),
+            sync_quantum=_int(d, "sync_quantum", "qemu") if "sync_quantum" in d else None,
         )
 
 
